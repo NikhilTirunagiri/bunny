@@ -22,10 +22,3 @@ jobs:
       run: swift build -v
     - name: Run tests
       run: swift test -v
-jobs:
-  build:
-    runs-on: macos-latest
-
-    defaults:
-      run:
-        working-directory: path/to/swift-package
