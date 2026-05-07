@@ -19,6 +19,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build
-      run: swift build -v
+      run: xcodebuild build -project bunny.xcodeproj -scheme bunny -destination 'platform=macOS'
     - name: Run tests
-      run: swift test -v
+      run: xcodebuild test -project bunny.xcodeproj -scheme bunny -destination 'platform=macOS'
