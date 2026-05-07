@@ -1,0 +1,150 @@
+import AppKit
+import SwiftUI
+import SwiftData
+import UserNotifications
+
+final class StatusBarController: NSObject {
+    private var statusItem: NSStatusItem!
+    private(set) var popover: NSPopover!
+    private var updateTimer: Timer?
+    private var modelContext: ModelContext?
+
+    private static let monoFont = NSFont.monospacedDigitSystemFont(
+        ofSize: NSFont.systemFontSize,
+        weight: .regular
+    )
+
+    private static let menuBarIcon: NSImage? = {
+        let config = NSImage.SymbolConfiguration(pointSize: 20, weight: .regular)
+        let img = NSImage(systemSymbolName: "hare.circle.fill", accessibilityDescription: "Bunny")?
+            .withSymbolConfiguration(config)
+        img?.isTemplate = true
+        return img
+    }()
+
+    func setup(modelContainer: ModelContainer) {
+        modelContext = modelContainer.mainContext
+
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = statusItem.button {
+            button.image = Self.menuBarIcon
+            button.imagePosition = .imageOnly
+            button.action = #selector(togglePopover)
+            button.target = self
+        }
+
+        popover = NSPopover()
+        popover.contentSize = NSSize(width: 340, height: 480)
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(
+            rootView: ContentView()
+                .modelContainer(modelContainer)
+                .environment(AppState.shared)
+                .environment(TimerManager.shared)
+        )
+
+        restorePinnedTask()
+        startUpdateTimer()
+    }
+
+    private func restorePinnedTask() {
+        guard let context = modelContext else { return }
+        let descriptor = FetchDescriptor<BunnyTask>()
+        guard let all = try? context.fetch(descriptor) else { return }
+        if let pinned = all.first(where: { $0.isPinned && $0.archivedAt == nil }) {
+            AppState.shared.pinnedTaskID = pinned.id
+        }
+    }
+
+    private func startUpdateTimer() {
+        let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.updateMenuBarItem()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        updateTimer = t
+    }
+
+    @objc func togglePopover() {
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            guard let button = statusItem.button else { return }
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
+        }
+    }
+
+    func updateMenuBarItem() {
+        guard let button = statusItem?.button else { return }
+        guard let pinnedID = AppState.shared.pinnedTaskID,
+              let context = modelContext else {
+            setDefault(button)
+            return
+        }
+
+        let descriptor = FetchDescriptor<BunnyTask>()
+        guard let all = try? context.fetch(descriptor),
+              let task = all.first(where: { $0.id == pinnedID && $0.archivedAt == nil }) else {
+            AppState.shared.pinnedTaskID = nil
+            setDefault(button)
+            return
+        }
+
+        let truncated = String(task.title.prefix(20))
+
+        if task.isTimerRunning {
+            setPinned(button, title: "\(truncated)  \(task.formattedRemaining)")
+            clearGreen(button)
+        } else if task.isTimerExpired {
+            setPinned(button, title: truncated)
+            applyGreen(button)
+            if AppState.shared.timerExpiredTaskID != pinnedID {
+                AppState.shared.timerExpiredTaskID = pinnedID
+                notify(title: task.title)
+            }
+        } else {
+            setPinned(button, title: truncated)
+            clearGreen(button)
+        }
+    }
+
+    private func setDefault(_ button: NSStatusBarButton) {
+        button.image = Self.menuBarIcon
+        button.imagePosition = .imageOnly
+        button.attributedTitle = attributed("")
+        clearGreen(button)
+    }
+
+    private func setPinned(_ button: NSStatusBarButton, title: String) {
+        button.image = Self.menuBarIcon
+        button.imagePosition = .imageLeft
+        button.attributedTitle = attributed(title)
+    }
+
+    private func attributed(_ string: String) -> NSAttributedString {
+        NSAttributedString(string: string, attributes: [.font: Self.monoFont])
+    }
+
+    private func applyGreen(_ button: NSStatusBarButton) {
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 4
+        button.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0.25).cgColor
+    }
+
+    private func clearGreen(_ button: NSStatusBarButton) {
+        button.layer?.backgroundColor = nil
+    }
+
+    private func notify(title: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Timer complete"
+        content.body = title
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
+    }
+}
