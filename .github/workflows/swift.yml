@@ -13,10 +13,19 @@ jobs:
   build:
 
     runs-on: macos-latest
-
+    defaults:
+      run:
+        working-directory: bunny/
     steps:
     - uses: actions/checkout@v4
     - name: Build
       run: swift build -v
     - name: Run tests
       run: swift test -v
+jobs:
+  build:
+    runs-on: macos-latest
+
+    defaults:
+      run:
+        working-directory: path/to/swift-package
