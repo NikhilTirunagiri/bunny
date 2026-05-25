@@ -10,8 +10,6 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     private var updateTimer: Timer?
     private var modelContext: ModelContext?
     private var lastButtonWidth: CGFloat = 0
-    private var isPopoverOpen = false
-
     private static let monoFont = NSFont.monospacedDigitSystemFont(
         ofSize: NSFont.systemFontSize,
         weight: .regular
@@ -80,28 +78,9 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
     // MARK: - NSPopoverDelegate
 
-    func popoverDidShow(_ notification: Notification) {
-        isPopoverOpen = true
-        guard let button = statusItem?.button else { return }
-        button.wantsLayer = true
-        button.layer?.cornerRadius = 6
-        // Apply active highlight only if no green (timer-expired) highlight is showing
-        if button.layer?.backgroundColor == nil {
-            button.layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.5).cgColor
-        }
-    }
+    func popoverDidShow(_ notification: Notification) {}
 
-    func popoverDidClose(_ notification: Notification) {
-        isPopoverOpen = false
-        guard let button = statusItem?.button else { return }
-        // Remove active highlight.  If the green timer-expired highlight is active
-        // we must preserve it — let updateMenuBarItem re-evaluate on the next tick.
-        let hadGreen = button.layer?.backgroundColor != nil
-            && AppState.shared.timerExpiredTaskID != nil
-        if !hadGreen {
-            button.layer?.backgroundColor = nil
-        }
-    }
+    func popoverDidClose(_ notification: Notification) {}
 
     @objc func statusItemClicked() {
         guard let event = NSApp.currentEvent else { return }
@@ -195,7 +174,6 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
               let context = modelContext else {
             setDefault(button)
             checkReposition(button)
-            applyActiveHighlightIfNeeded(button)
             return
         }
 
@@ -205,7 +183,6 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             AppState.shared.pinnedTaskID = nil
             setDefault(button)
             checkReposition(button)
-            applyActiveHighlightIfNeeded(button)
             return
         }
 
@@ -229,16 +206,6 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             clearGreen(button)
         }
         checkReposition(button)
-        applyActiveHighlightIfNeeded(button)
-    }
-
-    /// If the popover is open and no green (timer-expired) highlight is active,
-    /// show a subtle background to indicate the menu bar item is selected.
-    private func applyActiveHighlightIfNeeded(_ button: NSStatusBarButton) {
-        guard isPopoverOpen, button.layer?.backgroundColor == nil else { return }
-        button.wantsLayer = true
-        button.layer?.cornerRadius = 6
-        button.layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.5).cgColor
     }
 
     /// If the popover is open and the button width has changed (e.g. user
