@@ -4,6 +4,7 @@ import AppKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Query(sort: [SortDescriptor(\BunnyTask.sortOrder), SortDescriptor(\BunnyTask.createdAt)])
     private var allTasks: [BunnyTask]
@@ -37,24 +38,83 @@ struct ContentView: View {
         allActiveTasks.filter { $0.parentID == task.id }
     }
 
+    private var currentViewTitle: String {
+        switch activeView {
+        case .tasks:    return "Tasks"
+        case .archive:  return "Archive"
+        case .settings: return "Settings"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
+            // Header with title and input area
             if activeView == .tasks {
-                TextField("What's next on your list?", text: $newTaskTitle)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 15))
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "hare.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                        Text(currentViewTitle)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .onSubmit { addTask() }
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
 
-                Divider()
+                    TextField("What's next on your list?", text: $newTaskTitle)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 14))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.quinary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                        .onSubmit { addTask() }
+                }
+            } else {
+                // Header for archive/settings
+                HStack(spacing: 8) {
+                    Image(systemName: activeView == .archive ? "archivebox" : "gearshape")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                    Text(currentViewTitle)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
             }
 
-            switch activeView {
-            case .tasks:    taskListView
-            case .archive:  ArchiveView()
-            case .settings: SettingsView()
+            Divider()
+
+            // Content area with animated transitions
+            ZStack {
+                switch activeView {
+                case .tasks:
+                    taskListView
+                        .transition(.asymmetric(
+                            insertion: reduceMotion ? .identity : .move(edge: .leading).combined(with: .opacity),
+                            removal: reduceMotion ? .identity : .move(edge: .trailing).combined(with: .opacity)
+                        ))
+                case .archive:
+                    ArchiveView()
+                        .transition(.asymmetric(
+                            insertion: reduceMotion ? .identity : .move(edge: .trailing).combined(with: .opacity),
+                            removal: reduceMotion ? .identity : .move(edge: .leading).combined(with: .opacity)
+                        ))
+                case .settings:
+                    SettingsView()
+                        .transition(.asymmetric(
+                            insertion: reduceMotion ? .identity : .move(edge: .trailing).combined(with: .opacity),
+                            removal: reduceMotion ? .identity : .move(edge: .leading).combined(with: .opacity)
+                        ))
+                }
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: activeView)
 
             Divider()
             bottomBar
@@ -64,36 +124,60 @@ struct ContentView: View {
     }
 
     private var taskListView: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(topLevelTasks) { task in
-                    let subs = subtasks(of: task)
-                    VStack(spacing: 0) {
-                        TaskRowView(task: task, hasSubtasks: !subs.isEmpty)
-                        if task.isExpanded && !subs.isEmpty {
-                            ForEach(subs) { sub in
-                                TaskRowView(task: sub, hasSubtasks: false)
-                                    .padding(.leading, 24)
+        Group {
+            if topLevelTasks.isEmpty {
+                emptyTaskState
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(topLevelTasks) { task in
+                            let subs = subtasks(of: task)
+                            VStack(spacing: 0) {
+                                TaskRowView(task: task, hasSubtasks: !subs.isEmpty)
+
+                                if task.isExpanded && !subs.isEmpty {
+                                    ForEach(subs) { sub in
+                                        TaskRowView(task: sub, hasSubtasks: false)
+                                            .padding(.leading, 24)
+                                    }
+                                }
+                            }
+                            .background(dropTargetID == task.id ? Color.accentColor.opacity(0.08) : Color.clear)
+                            .onDrag {
+                                return NSItemProvider(object: task.id.uuidString as NSString)
+                            }
+                            .dropDestination(for: String.self) { items, _ in
+                                guard let idStr = items.first,
+                                      let fromID = UUID(uuidString: idStr),
+                                      fromID != task.id else { return false }
+                                moveTask(from: fromID, to: task.id)
+                                dropTargetID = nil
+                                return true
+                            } isTargeted: { targeted in
+                                dropTargetID = targeted ? task.id : nil
                             }
                         }
                     }
-                    .background(dropTargetID == task.id ? Color.accentColor.opacity(0.08) : Color.clear)
-                    .onDrag {
-                        return NSItemProvider(object: task.id.uuidString as NSString)
-                    }
-                    .dropDestination(for: String.self) { items, _ in
-                        guard let idStr = items.first,
-                              let fromID = UUID(uuidString: idStr),
-                              fromID != task.id else { return false }
-                        moveTask(from: fromID, to: task.id)
-                        dropTargetID = nil
-                        return true
-                    } isTargeted: { targeted in
-                        dropTargetID = targeted ? task.id : nil
-                    }
+                    .padding(.vertical, 8)
                 }
+                .frame(minHeight: 360)
             }
-            .padding(.vertical, 8)
+        }
+    }
+
+    private var emptyTaskState: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Image(systemName: "checklist")
+                .font(.system(size: 28))
+                .foregroundStyle(.tertiary)
+            Text("No tasks yet")
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+            Text("Type above to add your first task")
+                .font(.caption)
+                .foregroundStyle(.quaternary)
+            Spacer()
         }
         .frame(minHeight: 360)
     }
@@ -102,36 +186,52 @@ struct ContentView: View {
         var tasks = topLevelTasks
         guard let fromIdx = tasks.firstIndex(where: { $0.id == fromID }),
               let toIdx   = tasks.firstIndex(where: { $0.id == toID }) else { return }
-        tasks.move(fromOffsets: IndexSet(integer: fromIdx),
-                   toOffset: toIdx > fromIdx ? toIdx + 1 : toIdx)
-        for (i, t) in tasks.enumerated() { t.sortOrder = i }
+        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.8)) {
+            tasks.move(fromOffsets: IndexSet(integer: fromIdx),
+                       toOffset: toIdx > fromIdx ? toIdx + 1 : toIdx)
+            for (i, t) in tasks.enumerated() { t.sortOrder = i }
+        }
     }
 
     private var bottomBar: some View {
-        HStack {
+        HStack(spacing: 0) {
             Button {
-                activeView = activeView == .archive ? .tasks : .archive
+                let next: ActiveView = activeView == .archive ? .tasks : .archive
+                if !reduceMotion { withAnimation(.easeInOut(duration: 0.2)) { activeView = next } }
+                else { activeView = next }
             } label: {
-                Image(systemName: activeView == .archive ? "checklist" : "archivebox")
-                    .font(.system(size: 14))
-                    .foregroundStyle(activeView == .archive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                HStack(spacing: 6) {
+                    Image(systemName: activeView == .archive ? "checklist" : "archivebox")
+                        .font(.system(size: 13))
+                    Text(activeView == .archive ? "Tasks" : "Archive")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(activeView == .archive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             }
             .buttonStyle(.plain)
-            .padding(.leading, 14)
-            .help(activeView == .archive ? "Back to tasks" : "Archive")
+            .padding(.leading, 16)
+            .help(activeView == .archive ? "Back to tasks" : "View archived tasks")
+            .accessibilityLabel(activeView == .archive ? "Back to tasks" : "View archive")
 
             Spacer()
 
             Button {
-                activeView = activeView == .settings ? .tasks : .settings
+                let next: ActiveView = activeView == .settings ? .tasks : .settings
+                if !reduceMotion { withAnimation(.easeInOut(duration: 0.2)) { activeView = next } }
+                else { activeView = next }
             } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 14))
-                    .foregroundStyle(activeView == .settings ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                HStack(spacing: 6) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 13))
+                    Text("Settings")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(activeView == .settings ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             }
             .buttonStyle(.plain)
-            .padding(.trailing, 14)
-            .help(activeView == .settings ? "Back to tasks" : "Settings")
+            .padding(.trailing, 16)
+            .help(activeView == .settings ? "Back to tasks" : "Open settings")
+            .accessibilityLabel(activeView == .settings ? "Back to tasks" : "Open settings")
         }
         .frame(height: 36)
     }

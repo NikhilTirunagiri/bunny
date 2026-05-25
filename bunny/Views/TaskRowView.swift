@@ -5,6 +5,7 @@ struct TaskRowView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AppState.self) private var appState
     @Environment(TimerManager.self) private var timerManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Bindable var task: BunnyTask
     let hasSubtasks: Bool
@@ -12,6 +13,7 @@ struct TaskRowView: View {
     @State private var showTimerPicker = false
     @State private var isEditing = false
     @State private var editTitle = ""
+    @State private var isHovering = false
     @FocusState private var titleFocused: Bool
 
     var body: some View {
@@ -19,7 +21,9 @@ struct TaskRowView: View {
             // Expand/collapse arrow (parent tasks only, hidden when no subtasks)
             if !task.isSubtask {
                 Button {
-                    task.isExpanded.toggle()
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)) {
+                        task.isExpanded.toggle()
+                    }
                 } label: {
                     Image(systemName: task.isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
@@ -31,16 +35,23 @@ struct TaskRowView: View {
             }
 
             // Checkbox
-            Button { toggleComplete() } label: {
+            Button {
+                withAnimation(reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 0.6)) {
+                    toggleComplete()
+                }
+            } label: {
                 Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 17))
                     .foregroundStyle(task.isCompleted ? Color.accentColor : Color.secondary)
+                    .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
+            .scaleEffect(task.isCompleted ? 1.0 : 1.0)
+            .accessibilityLabel(task.isCompleted ? "Mark incomplete" : "Mark complete")
 
             // Title — tap once to edit when already selected, double-click otherwise
             if isEditing {
-                TextField("", text: $editTitle)
+                TextField("Task title", text: $editTitle)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .focused($titleFocused)
@@ -49,6 +60,7 @@ struct TaskRowView: View {
                     .onChange(of: titleFocused) { _, focused in
                         if !focused { commitEdit() }
                     }
+                    .accessibilityLabel("Edit task title")
             } else {
                 Text(task.title)
                     .font(.system(size: 14))
@@ -59,7 +71,7 @@ struct TaskRowView: View {
                     .onTapGesture(count: 2) { startEditing() }
             }
 
-            // Right-side actions
+            // Right-side actions — fade in on hover
             HStack(spacing: 6) {
                 if !task.isSubtask { timerView }
 
@@ -71,6 +83,7 @@ struct TaskRowView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Add subtask")
+                    .accessibilityLabel("Add subtask")
                 }
 
                 if !task.isSubtask {
@@ -81,6 +94,7 @@ struct TaskRowView: View {
                     }
                     .buttonStyle(.plain)
                     .help(task.isPinned ? "Unpin" : "Pin to menu bar")
+                    .accessibilityLabel(task.isPinned ? "Unpin from menu bar" : "Pin to menu bar")
                 }
 
                 Button { archiveTask() } label: {
@@ -90,11 +104,20 @@ struct TaskRowView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Move to archive")
+                .accessibilityLabel("Archive task")
             }
+            .opacity(isHovering ? 1 : 0.4)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: isHovering)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .contentShape(Rectangle())
+        .background(
+            isHovering ? Color.primary.opacity(0.04) : Color.clear
+        )
+        .onHover { hovering in
+            isHovering = hovering
+        }
         .onAppear {
             if appState.editingTaskID == task.id {
                 appState.editingTaskID = nil
@@ -125,6 +148,7 @@ struct TaskRowView: View {
         }
         .buttonStyle(.plain)
         .help("Set timer")
+        .accessibilityLabel(task.isTimerRunning ? "Timer \(task.formattedRemaining)" : "Set timer")
         .popover(isPresented: $showTimerPicker, arrowEdge: .bottom) {
             TimerPickerView(task: task)
         }
@@ -160,8 +184,10 @@ struct TaskRowView: View {
     // MARK: - Actions
 
     private func toggleComplete() {
-        task.isCompleted.toggle()
-        task.completedAt = task.isCompleted ? Date() : nil
+        withAnimation(reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 0.6)) {
+            task.isCompleted.toggle()
+            task.completedAt = task.isCompleted ? Date() : nil
+        }
     }
 
     private func togglePin() {
@@ -185,25 +211,29 @@ struct TaskRowView: View {
     private func addSubtask() {
         let sub = BunnyTask(title: "", parentID: task.id)
         modelContext.insert(sub)
-        task.isExpanded = true
+        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)) {
+            task.isExpanded = true
+        }
         appState.editingTaskID = sub.id
     }
 
     private func archiveTask() {
-        task.archivedAt = Date()
-        if task.isPinned {
-            task.isPinned = false
-            appState.pinnedTaskID = nil
-            appState.timerExpiredTaskID = nil
-        }
-        // Archive all subtasks so they don't become orphans
-        if !task.isSubtask {
-            let parentID = task.id
-            let descriptor = FetchDescriptor<BunnyTask>(
-                predicate: #Predicate { $0.parentID == parentID }
-            )
-            if let subtasks = try? modelContext.fetch(descriptor) {
-                for sub in subtasks { sub.archivedAt = task.archivedAt }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            task.archivedAt = Date()
+            if task.isPinned {
+                task.isPinned = false
+                appState.pinnedTaskID = nil
+                appState.timerExpiredTaskID = nil
+            }
+            // Archive all subtasks so they don't become orphans
+            if !task.isSubtask {
+                let parentID = task.id
+                let descriptor = FetchDescriptor<BunnyTask>(
+                    predicate: #Predicate { $0.parentID == parentID }
+                )
+                if let subtasks = try? modelContext.fetch(descriptor) {
+                    for sub in subtasks { sub.archivedAt = task.archivedAt }
+                }
             }
         }
     }

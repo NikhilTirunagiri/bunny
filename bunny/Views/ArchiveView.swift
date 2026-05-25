@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 
 struct ArchiveView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     @Query(sort: [SortDescriptor(\BunnyTask.archivedAt, order: .reverse)])
     private var allArchivedTasks: [BunnyTask]
 
@@ -60,6 +62,9 @@ struct ArchiveView: View {
             Text("No archived tasks")
                 .font(.callout)
                 .foregroundStyle(.tertiary)
+            Text("Completed tasks are archived each night")
+                .font(.caption)
+                .foregroundStyle(.quaternary)
             Spacer()
         }
     }
@@ -78,18 +83,21 @@ struct ArchiveView: View {
                             if isExpanded {
                                 ForEach(subs) { sub in
                                     subtaskRow(sub)
+                                        .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
                                 }
                             }
                         }
                     } header: {
                         Text(group.key)
-                            .font(.caption)
-                            .fontWeight(.medium)
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 16)
-                            .padding(.vertical, 5)
+                            .padding(.vertical, 6)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(.regularMaterial)
+                            .overlay(alignment: .bottom) {
+                                Divider()
+                            }
                     }
                 }
             }
@@ -100,8 +108,10 @@ struct ArchiveView: View {
     private func parentRow(task: BunnyTask, subs: [BunnyTask], isExpanded: Bool) -> some View {
         HStack(spacing: 6) {
             Button {
-                if isExpanded { expandedIDs.remove(task.id) }
-                else { expandedIDs.insert(task.id) }
+                withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)) {
+                    if isExpanded { expandedIDs.remove(task.id) }
+                    else { expandedIDs.insert(task.id) }
+                }
             } label: {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 9, weight: .semibold))
@@ -110,14 +120,20 @@ struct ArchiveView: View {
             .buttonStyle(.plain)
             .frame(width: 12)
             .disabled(subs.isEmpty)
+            .accessibilityLabel(isExpanded ? "Collapse subtasks" : "Expand subtasks")
 
-            Button { restore(task, subs: subs) } label: {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+                    restore(task, subs: subs)
+                }
+            } label: {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 17))
                     .foregroundStyle(.tertiary)
             }
             .buttonStyle(.plain)
-            .help("Uncheck to restore")
+            .help("Restore task")
+            .accessibilityLabel("Restore task")
 
             Text(task.title)
                 .font(.system(size: 14))
