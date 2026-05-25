@@ -16,17 +16,20 @@ final class StatusBarController: NSObject {
     )
 
     private static let menuBarIcon: NSImage? = {
-        let config = NSImage.SymbolConfiguration(pointSize: 20, weight: .regular)
+        let config = NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
         let img = NSImage(systemSymbolName: "hare.circle.fill", accessibilityDescription: "Bunny")?
             .withSymbolConfiguration(config)
         img?.isTemplate = true
         return img
     }()
 
+    /// Fixed width keeps the popover position stable when pinned state changes.
+    private static let statusItemLength: CGFloat = 180
+
     func setup(modelContainer: ModelContainer) {
         modelContext = modelContainer.mainContext
 
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: Self.statusItemLength)
         if let button = statusItem.button {
             button.image = Self.menuBarIcon
             button.imagePosition = .imageOnly
@@ -209,14 +212,17 @@ final class StatusBarController: NSObject {
 
     private func notify(title: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Timer complete"
-        content.body = title
-        content.sound = .default
+        content.title = "Timer Complete"
+        content.body = "⏰  \(title)"
+        content.interruptionLevel = .timeSensitive
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request)
+
+        // Play a pleasant system sound as an audible cue
+        NSSound(named: "Tink")?.play()
     }
 }

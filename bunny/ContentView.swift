@@ -270,7 +270,7 @@ struct ContentView: View {
                     Text(activeView == .archive ? "Tasks" : "Archive")
                         .font(.system(size: 11, weight: .medium))
                 }
-                .foregroundStyle(activeView == .archive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .foregroundStyle(activeView == .archive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
             }
             .buttonStyle(.plain)
             .padding(.leading, 16)
@@ -291,7 +291,7 @@ struct ContentView: View {
                     Text("Settings")
                         .font(.system(size: 11, weight: .medium))
                 }
-                .foregroundStyle(activeView == .settings ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .foregroundStyle(activeView == .settings ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
             }
             .buttonStyle(.plain)
             .padding(.trailing, 16)

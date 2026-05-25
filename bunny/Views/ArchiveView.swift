@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct ArchiveView: View {
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Query(sort: [SortDescriptor(\BunnyTask.archivedAt, order: .reverse)])
@@ -47,7 +48,27 @@ struct ArchiveView: View {
             if archivedParents.isEmpty {
                 emptyState
             } else {
-                archiveList
+                VStack(spacing: 0) {
+                    // Clear All button at top
+                    HStack {
+                        Spacer()
+                        Button(role: .destructive) { clearAllArchived() } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 10))
+                            Text("Clear All")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .opacity(0.7)
+                        .padding(.trailing, 16)
+                        .padding(.top, 6)
+                        .help("Delete all archived tasks permanently")
+                        .accessibilityLabel("Clear all archived tasks")
+                    }
+
+                    archiveList
+                }
             }
         }
         .frame(minHeight: 360)
@@ -142,6 +163,16 @@ struct ArchiveView: View {
                 .lineLimit(1)
 
             Spacer()
+
+            // Delete button for archived task
+            Button(role: .destructive) { deleteArchived(task, subs: subs) } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Delete permanently")
+            .accessibilityLabel("Delete task permanently")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -159,6 +190,15 @@ struct ArchiveView: View {
                 .strikethrough(true, color: Color.secondary.opacity(0.5))
                 .lineLimit(1)
             Spacer()
+
+            Button(role: .destructive) { deleteArchived(task, subs: []) } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Delete permanently")
+            .accessibilityLabel("Delete subtask permanently")
         }
         .padding(.leading, 36)
         .padding(.trailing, 12)
@@ -175,6 +215,25 @@ struct ArchiveView: View {
             sub.isCompleted = false
             sub.completedAt = nil
             if sub.isTimerExpired { sub.timerStartedAt = nil }
+        }
+    }
+
+    private func deleteArchived(_ task: BunnyTask, subs: [BunnyTask]) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
+            if !subs.isEmpty {
+                for sub in subs {
+                    modelContext.delete(sub)
+                }
+            }
+            modelContext.delete(task)
+        }
+    }
+
+    private func clearAllArchived() {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            for task in allArchivedTasks {
+                modelContext.delete(task)
+            }
         }
     }
 }
