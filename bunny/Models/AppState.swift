@@ -9,4 +9,5 @@ final class AppState {
     var pinnedTaskID: UUID? = nil
     var timerExpiredTaskID: UUID? = nil
     var editingTaskID: UUID? = nil
+    var selectedTaskID: UUID? = nil
 }

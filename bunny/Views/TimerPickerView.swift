@@ -18,22 +18,58 @@ struct TimerPickerView: View {
         return h * 3600 + m * 60 + s
     }
 
+    /// Quick presets: 5 min, 15 min, 25 min, 1 hour
+    private let presets: [(label: String, seconds: Int)] = [
+        ("5m",   5 * 60),
+        ("15m", 15 * 60),
+        ("25m", 25 * 60),
+        ("1h",  60 * 60),
+    ]
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
+            // Title
             Text("Set Timer")
                 .font(.system(size: 13, weight: .semibold))
 
-            // Time input
+            // Time input — three columns with chevron steppers
             HStack(spacing: 0) {
-                unitColumn(label: "HRS", text: $hoursStr, field: .hours, limit: 23)
+                unitColumn(label: "hr",  text: $hoursStr, field: .hours, limit: 23)
                 separator
-                unitColumn(label: "MIN", text: $minsStr,  field: .mins,  limit: 59)
+                unitColumn(label: "min", text: $minsStr,  field: .mins,  limit: 59)
                 separator
-                unitColumn(label: "SEC", text: $secsStr,  field: .secs,  limit: 59)
+                unitColumn(label: "sec", text: $secsStr,  field: .secs,  limit: 59)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 4)
 
-            // Action buttons
+            // Preset pill buttons
+            HStack(spacing: 6) {
+                ForEach(presets, id: \.label) { preset in
+                    Button {
+                        let h = preset.seconds / 3600
+                        let m = (preset.seconds % 3600) / 60
+                        let s = preset.seconds % 60
+                        hoursStr = "\(h)"
+                        minsStr  = "\(m)"
+                        secsStr  = "\(s)"
+                    } label: {
+                        Text(preset.label)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.primary.opacity(0.06))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Set timer to \(preset.label)")
+                    .accessibilityLabel("\(preset.label) preset")
+                }
+            }
+
+            // Action buttons — Start spans full width
             HStack(spacing: 8) {
                 if task.hasTimer {
                     Button {
@@ -66,7 +102,7 @@ struct TimerPickerView: View {
             }
         }
         .padding(16)
-        .frame(width: 280)
+        .frame(width: 300)
         .onChange(of: focused) { _, newFocus in
             if newFocus != .hours { commit(&hoursStr, limit: 23) }
             if newFocus != .mins  { commit(&minsStr,  limit: 59) }
@@ -91,12 +127,12 @@ struct TimerPickerView: View {
         Text(":")
             .font(.system(size: 20, weight: .light))
             .foregroundStyle(.quaternary)
-            .padding(.bottom, 12)
+            .padding(.bottom, 10)
     }
 
     @ViewBuilder
     private func unitColumn(label: String, text: Binding<String>, field: Field, limit: Int) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             Text(label)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -110,23 +146,23 @@ struct TimerPickerView: View {
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .medium))
-                        .frame(width: 24, height: 28)
+                        .frame(width: 22, height: 24)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("Decrease \(label.lowercased())")
+                .accessibilityLabel("Decrease \(label)")
 
                 TextField("0", text: text)
                     .multilineTextAlignment(.center)
                     .font(.system(size: 24, design: .monospaced))
-                    .frame(width: 40)
+                    .frame(width: 44)
                     .focused($focused, equals: field)
                     .onChange(of: text.wrappedValue) { _, v in
                         let filtered = String(v.filter(\.isNumber).prefix(2))
                         if filtered != v { text.wrappedValue = filtered }
                     }
                     .onSubmit { commit(&text.wrappedValue, limit: limit) }
-                    .accessibilityLabel("\(label.lowercased()) value")
+                    .accessibilityLabel("\(label) value")
 
                 Button {
                     commit(&text.wrappedValue, limit: limit)
@@ -136,11 +172,11 @@ struct TimerPickerView: View {
                 } label: {
                     Image(systemName: "chevron.up")
                         .font(.system(size: 10, weight: .medium))
-                        .frame(width: 24, height: 28)
+                        .frame(width: 22, height: 24)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("Increase \(label.lowercased())")
+                .accessibilityLabel("Increase \(label)")
             }
         }
     }

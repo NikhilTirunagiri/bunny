@@ -14,7 +14,13 @@ struct TaskRowView: View {
     @State private var isEditing = false
     @State private var editTitle = ""
     @State private var isHovering = false
+    @State private var showDeleteConfirm = false
     @FocusState private var titleFocused: Bool
+
+    /// Placeholder text to keep the layout stable when editing.
+    private var displayTitle: String {
+        task.title.isEmpty ? " " : task.title
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -46,10 +52,9 @@ struct TaskRowView: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
-            .scaleEffect(task.isCompleted ? 1.0 : 1.0)
             .accessibilityLabel(task.isCompleted ? "Mark incomplete" : "Mark complete")
 
-            // Title — tap once to edit when already selected, double-click otherwise
+            // Title — single click enters edit mode with cursor at end
             if isEditing {
                 TextField("Task title", text: $editTitle)
                     .textFieldStyle(.plain)
@@ -61,14 +66,18 @@ struct TaskRowView: View {
                         if !focused { commitEdit() }
                     }
                     .accessibilityLabel("Edit task title")
+                    // Prevent parent tap gestures (e.g. ScrollView) from firing
+                    // when tapping inside the text field for cursor positioning
+                    .onTapGesture { /* consumed here — cursor handled by AppKit */ }
             } else {
-                Text(task.title)
+                Text(displayTitle)
                     .font(.system(size: 14))
                     .foregroundStyle(task.isCompleted ? .secondary : .primary)
                     .strikethrough(task.isCompleted, color: .secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .lineLimit(1)
-                    .onTapGesture(count: 2) { startEditing() }
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 1) { startEditing() }
             }
 
             // Right-side actions — fade in on hover
@@ -103,8 +112,28 @@ struct TaskRowView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Move to archive")
+                .help("Archive task")
                 .accessibilityLabel("Archive task")
+
+                // Delete button (permanent)
+                if showDeleteConfirm {
+                    Button(role: .destructive) { deleteTask() } label: {
+                        Text("Delete?")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Confirm permanent delete")
+                } else {
+                    Button { showDeleteConfirm = true } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete permanently")
+                    .accessibilityLabel("Delete task permanently")
+                }
             }
             .opacity(isHovering ? 1 : 0.4)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: isHovering)
@@ -117,11 +146,24 @@ struct TaskRowView: View {
         )
         .onHover { hovering in
             isHovering = hovering
+            if hovering {
+                appState.selectedTaskID = task.id
+            } else if appState.selectedTaskID == task.id {
+                appState.selectedTaskID = nil
+            }
+            // Hide delete confirmation when mouse leaves
+            if !hovering { showDeleteConfirm = false }
         }
         .onAppear {
             if appState.editingTaskID == task.id {
                 appState.editingTaskID = nil
                 startEditing()
+            }
+        }
+        // Dismiss editing when another task starts editing
+        .onChange(of: appState.editingTaskID) { _, newID in
+            if isEditing && newID != task.id {
+                commitEdit()
             }
         }
     }
@@ -157,14 +199,24 @@ struct TaskRowView: View {
     // MARK: - Editing
 
     private func startEditing() {
+        guard !isEditing else { return }
         editTitle = task.title
         isEditing = true
+        appState.editingTaskID = task.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            titleFocused = true
+            self.titleFocused = true
+            // Position cursor at end of text instead of selecting all
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                if let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
+                    let length = textView.string.count
+                    textView.selectedRange = NSRange(location: length, length: 0)
+                }
+            }
         }
     }
 
     private func commitEdit() {
+        guard isEditing else { return }
         let trimmed = editTitle.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty {
             task.title = trimmed
@@ -172,25 +224,34 @@ struct TaskRowView: View {
             modelContext.delete(task)
         }
         isEditing = false
+        appState.editingTaskID = nil
     }
 
     private func cancelEdit() {
+        guard isEditing else { return }
         if task.title.isEmpty {
             modelContext.delete(task)
         }
         isEditing = false
+        appState.editingTaskID = nil
     }
 
     // MARK: - Actions
 
     private func toggleComplete() {
+        commitEdit() // Commit any in-progress edit before acting
         withAnimation(reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 0.6)) {
             task.isCompleted.toggle()
             task.completedAt = task.isCompleted ? Date() : nil
         }
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            .generic,
+            performanceTime: .default
+        )
     }
 
     private func togglePin() {
+        commitEdit()
         if task.isPinned {
             task.isPinned = false
             appState.pinnedTaskID = nil
@@ -209,6 +270,7 @@ struct TaskRowView: View {
     }
 
     private func addSubtask() {
+        commitEdit()
         let sub = BunnyTask(title: "", parentID: task.id)
         modelContext.insert(sub)
         withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)) {
@@ -218,6 +280,7 @@ struct TaskRowView: View {
     }
 
     private func archiveTask() {
+        commitEdit()
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
             task.archivedAt = Date()
             if task.isPinned {
@@ -225,7 +288,6 @@ struct TaskRowView: View {
                 appState.pinnedTaskID = nil
                 appState.timerExpiredTaskID = nil
             }
-            // Archive all subtasks so they don't become orphans
             if !task.isSubtask {
                 let parentID = task.id
                 let descriptor = FetchDescriptor<BunnyTask>(
@@ -236,5 +298,30 @@ struct TaskRowView: View {
                 }
             }
         }
+    }
+
+    private func deleteTask() {
+        commitEdit()
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
+            if task.isPinned {
+                task.isPinned = false
+                appState.pinnedTaskID = nil
+                appState.timerExpiredTaskID = nil
+            }
+            if !task.isSubtask {
+                let parentID = task.id
+                let descriptor = FetchDescriptor<BunnyTask>(
+                    predicate: #Predicate { $0.parentID == parentID }
+                )
+                if let subtasks = try? modelContext.fetch(descriptor) {
+                    for sub in subtasks { modelContext.delete(sub) }
+                }
+            }
+            modelContext.delete(task)
+        }
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            .generic,
+            performanceTime: .default
+        )
     }
 }

@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftData
 import UserNotifications
+import ServiceManagement
 
 final class StatusBarController: NSObject {
     private var statusItem: NSStatusItem!
@@ -29,7 +30,8 @@ final class StatusBarController: NSObject {
         if let button = statusItem.button {
             button.image = Self.menuBarIcon
             button.imagePosition = .imageOnly
-            button.action = #selector(togglePopover)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.action = #selector(statusItemClicked)
             button.target = self
         }
 
@@ -45,6 +47,76 @@ final class StatusBarController: NSObject {
 
         restorePinnedTask()
         startUpdateTimer()
+        setupNotificationObserver()
+    }
+
+    private func setupNotificationObserver() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleClosePopover),
+            name: .bunnyClosePopover,
+            object: nil
+        )
+    }
+
+    @objc private func handleClosePopover() {
+        if popover.isShown {
+            popover.performClose(nil)
+        }
+    }
+
+    @objc func statusItemClicked() {
+        guard let event = NSApp.currentEvent else { return }
+        if event.type == .rightMouseUp {
+            showContextMenu()
+        } else {
+            togglePopover()
+        }
+    }
+
+    private func showContextMenu() {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Bunny", action: nil, keyEquivalent: "")
+            .attributedTitle = NSAttributedString(
+                string: "Bunny",
+                attributes: [.font: NSFont.boldSystemFont(ofSize: 13)]
+            )
+        menu.addItem(.separator())
+
+        let launchItem = NSMenuItem(
+            title: "Launch at Login",
+            action: #selector(toggleLaunchAtLogin),
+            keyEquivalent: ""
+        )
+        launchItem.target = self
+        launchItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(launchItem)
+
+        menu.addItem(.separator())
+
+        menu.addItem(withTitle: "Quit Bunny", action: #selector(quitApp), keyEquivalent: "q")
+            .target = self
+
+        // Temporarily attach menu to the status item to display it
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            print("SMAppService error: \(error)")
+        }
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
     }
 
     private func restorePinnedTask() {
