@@ -5,7 +5,8 @@ struct ArchiveView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @Query(sort: [SortDescriptor(\BunnyTask.archivedAt, order: .reverse)])
+    @Query(filter: #Predicate<BunnyTask> { $0.archivedAt != nil },
+           sort: [SortDescriptor(\BunnyTask.archivedAt, order: .reverse)])
     private var allArchivedTasks: [BunnyTask]
 
     @State private var expandedIDs: Set<UUID> = []
