@@ -35,6 +35,11 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             button.imagePosition = .imageOnly
             button.action = #selector(togglePopover)
             button.target = self
+
+            let dropView = StatusItemDropView(frame: button.bounds)
+            dropView.onDragEntered = { [weak self] in self?.openPopover() }
+            dropView.onClick = { [weak self] in self?.togglePopover() }
+            button.addSubview(dropView)
         }
 
         popover = NSPopover()
