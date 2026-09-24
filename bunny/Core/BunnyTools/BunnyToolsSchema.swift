@@ -39,12 +39,12 @@ enum BunnyToolsSchema {
                         ],
                         "timer_minutes": [
                             "type": "number",
-                            "description": "Timer duration in minutes; must be greater than 0 and at most 1440.",
+                            "description": "Timer duration in minutes; must be greater than 0 and at most 1440. Not allowed with parent_id (subtasks have no timer).",
                         ],
                         "subtasks": [
                             "type": "array",
                             "items": ["type": "string"],
-                            "description": "Titles of subtasks to create under this task.",
+                            "description": "Titles of subtasks to create under this task (at most 50).",
                         ],
                     ],
                     "required": ["title"],
@@ -68,6 +68,7 @@ enum BunnyToolsSchema {
                                     "subtasks": [
                                         "type": "array",
                                         "items": ["type": "string"],
+                                        "description": "At most 50 subtask titles.",
                                     ],
                                 ],
                                 "required": ["title"],
@@ -76,7 +77,7 @@ enum BunnyToolsSchema {
                         ],
                         "parent_id": [
                             "type": "string",
-                            "description": "UUID of the parent task for all created tasks.",
+                            "description": "UUID of the parent task for all created tasks (they then can't have timer_minutes or subtasks).",
                         ],
                     ],
                     "required": ["tasks"],
@@ -93,8 +94,8 @@ enum BunnyToolsSchema {
                         "title": ["type": "string", "description": "New title, trimmed and capped at 200 characters."],
                         "description": ["type": "string", "description": "New description, capped at 10000 characters."],
                         "timer_minutes": [
-                            "type": "number",
-                            "description": "New timer duration in minutes; must be greater than 0 and at most 1440.",
+                            "type": ["number", "null"],
+                            "description": "New timer duration in minutes (greater than 0, at most 1440), or 0 / null to remove the timer. Subtasks can't have timers.",
                         ],
                     ],
                     "required": ["id"],

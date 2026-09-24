@@ -26,8 +26,8 @@ final class BunnyToolsBackendImpl: BunnyToolsBackend {
             result = createTasks([newTask], parentID: parentID).map { created -> Any in created[0] }
         case .createTasks(let newTasks, let parentID):
             result = createTasks(newTasks, parentID: parentID).map { created -> Any in ["created": created] }
-        case .updateTask(let id, let title, let description, let timerMinutes):
-            result = updateTask(id, title: title, description: description, timerMinutes: timerMinutes)
+        case .updateTask(let id, let title, let description, let timer):
+            result = updateTask(id, title: title, description: description, timer: timer)
         case .completeTask(let id, let completed):
             result = completeTask(id, completed: completed)
         case .addToShelf(let taskID, let paths):
@@ -86,35 +86,46 @@ final class BunnyToolsBackendImpl: BunnyToolsBackend {
             created.append(["id": task.id.uuidString, "title": task.title, "subtask_ids": subtaskIDs])
         }
         parent?.isExpanded = true
-        save()
-        return .success(created)
+        return save().map { created }
     }
 
     private func updateTask(_ id: UUID, title: String?, description: String?,
-                            timerMinutes: Double?) -> Result<Any, BunnyToolError> {
-        liveTask(id).map { task -> Any in
+                            timer: TimerChange?) -> Result<Any, BunnyToolError> {
+        liveTask(id).flatMap { task -> Result<Any, BunnyToolError> in
+            if case .set? = timer, task.isSubtask {
+                return .failure(BunnyToolArguments.subtaskTimerError)
+            }
             if let title { task.title = title }
             if let description { task.taskDescription = description }
-            if let timerMinutes { task.timerDuration = timerMinutes * 60 }
-            save()
-            return summary(of: task)
+            switch timer {
+            case .set(let minutes)?:
+                task.timerDuration = minutes * 60
+            case .clear?:
+                task.timerDuration = nil
+                task.timerStartedAt = nil
+            case nil:
+                break
+            }
+            return save().map { summary(of: task) }
         }
     }
 
     private func completeTask(_ id: UUID, completed: Bool) -> Result<Any, BunnyToolError> {
-        liveTask(id).map { task -> Any in
+        liveTask(id).flatMap { task -> Result<Any, BunnyToolError> in
             if task.isCompleted != completed {
                 task.isCompleted = completed
                 task.completedAt = completed ? Date() : nil
+                // "Done by the agent" only describes a completion; un-completing clears it.
+                if !completed {
+                    task.completedByAgent = false
+                }
             }
-            task.completedByAgent = false
-            save()
-            return summary(of: task)
+            return save().map { summary(of: task) }
         }
     }
 
     private func addToShelf(_ taskID: UUID, paths: [String]) -> Result<Any, BunnyToolError> {
-        liveTask(taskID).map { task -> Any in
+        liveTask(taskID).flatMap { task -> Result<Any, BunnyToolError> in
             let fileManager = FileManager.default
             var urls: [URL] = []
             var missing: [String] = []
@@ -127,14 +138,15 @@ final class BunnyToolsBackendImpl: BunnyToolsBackend {
                 }
             }
             let added = ShelfService.add(urls, to: task.id, in: context)
-            save()
-            return [
-                "added": added,
-                // Already on the shelf, or not bookmarkable.
-                "skipped": urls.count - added,
-                "missing": missing,
-                "shelf": ShelfService.items(for: task.id, in: context).map(\.lastKnownPath),
-            ] as [String: Any]
+            return save().map {
+                [
+                    "added": added,
+                    // Already on the shelf, or not bookmarkable.
+                    "skipped": urls.count - added,
+                    "missing": missing,
+                    "shelf": ShelfService.items(for: task.id, in: context).map(\.lastKnownPath),
+                ] as [String: Any]
+            }
         }
     }
 
@@ -169,11 +181,14 @@ final class BunnyToolsBackendImpl: BunnyToolsBackend {
         return (siblings.map(\.sortOrder).max() ?? -1) + 1
     }
 
-    private func save() {
+    /// Saves the main context; a failure becomes the tool's error result.
+    private func save() -> Result<Void, BunnyToolError> {
         do {
             try context.save()
+            return .success(())
         } catch {
             Self.log.error("Bunny tools: save failed: \(error.localizedDescription, privacy: .public)")
+            return .failure(BunnyToolError(message: "Couldn't save the change: \(error.localizedDescription)"))
         }
     }
 

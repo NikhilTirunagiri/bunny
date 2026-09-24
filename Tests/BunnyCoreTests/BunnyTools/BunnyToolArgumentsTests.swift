@@ -200,7 +200,7 @@ struct BunnyToolArgumentsTests {
     @Test func updateTaskIDOnly() {
         let id = UUID()
         let result = BunnyToolArguments.parse(name: "update_task", arguments: ["id": id.uuidString])
-        #expect(result == .success(.updateTask(id: id, title: nil, description: nil, timerMinutes: nil)))
+        #expect(result == .success(.updateTask(id: id, title: nil, description: nil, timer: nil)))
     }
 
     @Test func updateTaskAllFields() {
@@ -209,7 +209,7 @@ struct BunnyToolArgumentsTests {
             name: "update_task",
             arguments: ["id": id.uuidString, "title": "New", "description": "Desc", "timer_minutes": 10]
         )
-        #expect(result == .success(.updateTask(id: id, title: "New", description: "Desc", timerMinutes: 10)))
+        #expect(result == .success(.updateTask(id: id, title: "New", description: "Desc", timer: .set(minutes: 10))))
     }
 
     @Test func updateTaskMissingIDFails() {
@@ -236,6 +236,65 @@ struct BunnyToolArgumentsTests {
             arguments: ["id": UUID().uuidString, "timer_minutes": 2000]
         )
         #expect(isFailure(result))
+    }
+
+    @Test func updateTaskTimerZeroOrNullClears() {
+        let id = UUID()
+        for value: Any in [0, 0.0, NSNull()] {
+            let result = BunnyToolArguments.parse(name: "update_task", arguments: ["id": id.uuidString, "timer_minutes": value])
+            #expect(result == .success(.updateTask(id: id, title: nil, description: nil, timer: .clear)))
+        }
+    }
+
+    @Test func updateTaskNegativeTimerFails() {
+        let result = BunnyToolArguments.parse(name: "update_task", arguments: ["id": UUID().uuidString, "timer_minutes": -1])
+        #expect(isFailure(result))
+    }
+
+    // MARK: - Booleans are not numbers
+
+    @Test func booleanTimerIsRejected() {
+        for value: Any in [true, false, NSNumber(value: true)] {
+            #expect(isFailure(BunnyToolArguments.parse(name: "create_task", arguments: ["title": "T", "timer_minutes": value])))
+            #expect(isFailure(BunnyToolArguments.parse(name: "update_task", arguments: ["id": UUID().uuidString, "timer_minutes": value])))
+        }
+    }
+
+    @Test func jsonBooleanTimerIsRejected() throws {
+        let json = #"{"title": "T", "timer_minutes": true}"#
+        let arguments = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(isFailure(BunnyToolArguments.parse(name: "create_task", arguments: arguments)))
+
+        let numeric = #"{"title": "T", "timer_minutes": 1}"#
+        let numericArguments = try #require(try JSONSerialization.jsonObject(with: Data(numeric.utf8)) as? [String: Any])
+        let expected = NewTask(title: "T", description: nil, timerMinutes: 1, subtasks: [])
+        #expect(BunnyToolArguments.parse(name: "create_task", arguments: numericArguments) == .success(.createTask(expected, parentID: nil)))
+    }
+
+    // MARK: - Subtask limits
+
+    @Test func subtasksCappedAtFifty() {
+        let fifty = (1...50).map { "S\($0)" }
+        let ok = BunnyToolArguments.parse(name: "create_task", arguments: ["title": "T", "subtasks": fifty])
+        #expect(ok == .success(.createTask(NewTask(title: "T", description: nil, timerMinutes: nil, subtasks: fifty), parentID: nil)))
+        let tooMany = BunnyToolArguments.parse(name: "create_task", arguments: ["title": "T", "subtasks": fifty + ["S51"]])
+        #expect(isFailure(tooMany))
+        let batch = BunnyToolArguments.parse(name: "create_tasks", arguments: ["tasks": [["title": "T", "subtasks": fifty + ["S51"]]]])
+        #expect(isFailure(batch))
+    }
+
+    @Test func subtaskTimerIsRejected() {
+        let parent = UUID().uuidString
+        let single = BunnyToolArguments.parse(name: "create_task", arguments: ["title": "T", "parent_id": parent, "timer_minutes": 5])
+        #expect(single == .failure(BunnyToolArguments.subtaskTimerError))
+        let batch = BunnyToolArguments.parse(
+            name: "create_tasks",
+            arguments: ["parent_id": parent, "tasks": [["title": "A"], ["title": "B", "timer_minutes": 5]]]
+        )
+        #expect(batch == .failure(BunnyToolArguments.subtaskTimerError))
+        // Without parent_id a timer is fine.
+        let topLevel = BunnyToolArguments.parse(name: "create_tasks", arguments: ["tasks": [["title": "B", "timer_minutes": 5]]])
+        #expect(!isFailure(topLevel))
     }
 
     // MARK: - complete_task

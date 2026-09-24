@@ -24,12 +24,19 @@ struct NewTask: Equatable {
     var subtasks: [String]
 }
 
+/// An `update_task` timer change: a new duration, or removing the timer (`timer_minutes` 0 or null).
+enum TimerChange: Equatable {
+    case set(minutes: Double)
+    case clear
+}
+
 /// The Bunny tools an agent can invoke, already validated.
 enum BunnyToolCall: Equatable {
     case listTasks(includeCompleted: Bool)
     case createTask(NewTask, parentID: UUID?)
     case createTasks([NewTask], parentID: UUID?)
-    case updateTask(id: UUID, title: String?, description: String?, timerMinutes: Double?)
+    /// `timer` nil leaves the timer unchanged.
+    case updateTask(id: UUID, title: String?, description: String?, timer: TimerChange?)
     case completeTask(id: UUID, completed: Bool)
     case addToShelf(taskID: UUID, paths: [String])
 }

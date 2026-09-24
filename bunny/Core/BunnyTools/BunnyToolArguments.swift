@@ -6,8 +6,10 @@ import Foundation
 /// Validation rules (shared across tools):
 /// - Titles are trimmed, must be non-empty, and capped at 200 characters.
 /// - Descriptions are capped at 10,000 characters.
-/// - `timer_minutes` must be greater than 0 and at most 1440.
-/// - Batches (`create_tasks`) hold at most 100 tasks.
+/// - `timer_minutes` must be a number (not a boolean) greater than 0 and at most 1440. `update_task`
+///   also takes 0 or null to remove the timer. Subtasks have no timer: `timer_minutes` is refused
+///   together with `parent_id`.
+/// - Batches (`create_tasks`) hold at most 100 tasks; a task holds at most 50 `subtasks`.
 /// - UUIDs are parsed strictly.
 /// - `paths` must be absolute.
 enum BunnyToolArguments {
@@ -42,9 +44,12 @@ enum BunnyToolArguments {
             validatedDescription(arguments).flatMap { description in
                 validatedTimerMinutes(arguments).flatMap { timer in
                     validatedSubtasks(arguments).flatMap { subtasks in
-                        validatedOptionalUUID(arguments, key: "parent_id").map { parentID in
+                        validatedOptionalUUID(arguments, key: "parent_id").flatMap { parentID in
+                            if parentID != nil && timer != nil {
+                                return .failure(subtaskTimerError)
+                            }
                             let newTask = NewTask(title: title, description: description, timerMinutes: timer, subtasks: subtasks)
-                            return .createTask(newTask, parentID: parentID)
+                            return .success(.createTask(newTask, parentID: parentID))
                         }
                     }
                 }
@@ -80,8 +85,11 @@ enum BunnyToolArguments {
             }
         }
 
-        return validatedOptionalUUID(arguments, key: "parent_id").map { parentID in
-            .createTasks(newTasks, parentID: parentID)
+        return validatedOptionalUUID(arguments, key: "parent_id").flatMap { parentID in
+            if parentID != nil && newTasks.contains(where: { $0.timerMinutes != nil }) {
+                return .failure(subtaskTimerError)
+            }
+            return .success(.createTasks(newTasks, parentID: parentID))
         }
     }
 
@@ -101,8 +109,8 @@ enum BunnyToolArguments {
         validatedUUID(arguments["id"], field: "id").flatMap { id in
             validatedOptionalTitle(arguments).flatMap { title in
                 validatedDescription(arguments).flatMap { description in
-                    validatedTimerMinutes(arguments).map { timer in
-                        .updateTask(id: id, title: title, description: description, timerMinutes: timer)
+                    validatedTimerChange(arguments).map { timer in
+                        .updateTask(id: id, title: title, description: description, timer: timer)
                     }
                 }
             }
@@ -160,6 +168,18 @@ enum BunnyToolArguments {
         return .success(string)
     }
 
+    /// Reported for `timer_minutes` on a subtask (the backend reports it for `update_task` too).
+    static let subtaskTimerError = BunnyToolError(message: "Subtasks can't have timers; omit timer_minutes for subtasks")
+
+    /// `update_task`: absent = unchanged, 0 or null = remove the timer, otherwise a valid duration.
+    private static func validatedTimerChange(_ arguments: [String: Any], key: String = "timer_minutes") -> Result<TimerChange?, BunnyToolError> {
+        guard let raw = arguments[key] else { return .success(nil) }
+        if isNull(raw) || numberValue(raw) == 0 {
+            return .success(.clear)
+        }
+        return validatedTimerMinutes(arguments, key: key).map { minutes in minutes.map { .set(minutes: $0) } }
+    }
+
     private static func validatedTimerMinutes(_ arguments: [String: Any], key: String = "timer_minutes") -> Result<Double?, BunnyToolError> {
         guard let raw = arguments[key], !isNull(raw) else { return .success(nil) }
         guard let value = numberValue(raw) else {
@@ -175,6 +195,9 @@ enum BunnyToolArguments {
         guard let raw = arguments[key], !isNull(raw) else { return .success([]) }
         guard let array = raw as? [Any] else {
             return .failure(BunnyToolError(message: "subtasks must be an array of strings"))
+        }
+        guard array.count <= maxSubtasks else {
+            return .failure(BunnyToolError(message: "subtasks must contain at most \(maxSubtasks) items"))
         }
         var titles: [String] = []
         titles.reserveCapacity(array.count)
@@ -242,7 +265,13 @@ enum BunnyToolArguments {
         value is NSNull
     }
 
+    /// Subtask titles accepted per task.
+    static let maxSubtasks = 50
+
+    /// A JSON number as a Double. JSON booleans (which `JSONSerialization` also returns as `NSNumber`)
+    /// are not numbers.
     private static func numberValue(_ value: Any) -> Double? {
+        if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
         if let double = value as? Double { return double }
         if let int = value as? Int { return Double(int) }
         if let number = value as? NSNumber { return number.doubleValue }
