@@ -62,7 +62,7 @@ Protocol references: `docs/superpowers/research/claude-stream-json.md`, `codex-a
 | `bunny/Controllers/SessionLauncher.swift` | executes launch plans | 5 |
 | `bunny/AppDelegate.swift`, `StatusBarController.swift` | supervisor boot, attention dot | 5 |
 | `bunny/Views/ShimmerText.swift`, `bunny/Views/AgentButton.swift`, `TaskRowView.swift` | row UI | 6 |
-| `bunny/Views/Panel/AgentPanelSection.swift`, `TaskPanelView.swift`, `SettingsView.swift`, `bunny/Views/AgentSettingsSection.swift` | panel + settings UI | 7 |
+| `bunny/Views/Panel/AgentPanelSection.swift`, `TaskPanelView.swift`, `bunny/Views/Settings/AgentSettingsSection.swift` (replace plan C placeholder body) | panel + settings UI | 7 |
 
 ---
 
@@ -610,7 +610,7 @@ struct ShimmerText: View {
 
 ### Task 7: Panel agent section & Settings → Agents
 
-**Files:** Create `bunny/Views/Panel/AgentPanelSection.swift` and `bunny/Views/AgentSettingsSection.swift`. Modify `bunny/Views/Panel/TaskPanelView.swift` (`agentSection` → `AgentPanelSection(task: task)`) and `bunny/Views/SettingsView.swift` (add `Section("Agents") { AgentSettingsSection() }`).
+**Files:** Create `bunny/Views/Panel/AgentPanelSection.swift`. Replace the placeholder body of `bunny/Views/Settings/AgentSettingsSection.swift` (created by plan C Task C2; it is the Agents tab of the Settings window — wrap content in `Form { … }.formStyle(.grouped)`). Modify `bunny/Views/Panel/TaskPanelView.swift` (`agentSection` → `AgentPanelSection(task: task)`). Do not touch other settings files.
 
 **Interfaces:** Consumes `AgentSupervisor`, `AgentSettings`, `BunnyTask.pendingQuestion/runState/agentActivity/agentSummary`, `ShellEnvironment.locate`.
 
@@ -635,7 +635,7 @@ struct ShimmerText: View {
   - `Picker("Open sessions in")`: installed `OpenInApp` cases only.
   - Default workspace: path text plus a `Choose…` button → `NSOpenPanel` (directories only).
   - Use `@State` mirrors initialized from `AgentSettings` in `.onAppear` and written back on change.
-- [ ] **Step 3:** Mount both.
+- [ ] **Step 3:** Mount `AgentPanelSection` in `TaskPanelView.agentSection` (the Settings tab already hosts `AgentSettingsSection`).
 - [ ] **Step 4:** Self-review: no `.glassEffect` inside the panel; all buttons are reachable at 300 pt width. Commit `feat: agent status, questions and settings UI`.
 
 ## Execution waves
