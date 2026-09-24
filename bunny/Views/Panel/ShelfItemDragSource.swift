@@ -5,6 +5,7 @@ import SwiftUI
 /// opens on double-click, shows the context menu, and reports hover.
 struct ShelfItemDragSource: NSViewRepresentable {
     let url: URL?                        // nil = missing file → not draggable
+    var toolTip: String?
     var onDragEnded: (NSDragOperation) -> Void
     var onDoubleClick: () -> Void
     var menu: () -> NSMenu
@@ -14,6 +15,7 @@ struct ShelfItemDragSource: NSViewRepresentable {
 
     func updateNSView(_ view: DragSourceView, context: Context) {
         view.url = url
+        view.toolTip = toolTip
         view.onDragEnded = onDragEnded
         view.onDoubleClick = onDoubleClick
         view.menuProvider = menu
@@ -27,6 +29,11 @@ struct ShelfItemDragSource: NSViewRepresentable {
         var menuProvider: (() -> NSMenu)?
         var onHover: ((Bool) -> Void)?
         private var mouseDownEvent: NSEvent?
+        /// Keeps the source alive for the whole session: the row (and this view) can be torn down mid-drag
+        /// when the panel switches to the task under the pointer.
+        private static var activeSession: DragSourceView?
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
@@ -53,6 +60,7 @@ struct ShelfItemDragSource: NSViewRepresentable {
             icon.size = NSSize(width: 32, height: 32)
             let p = convert(down.locationInWindow, from: nil)
             item.setDraggingFrame(NSRect(x: p.x - 16, y: p.y - 16, width: 32, height: 32), contents: icon)
+            Self.activeSession = self
             beginDraggingSession(with: [item], event: down, source: self)
         }
 
@@ -60,11 +68,14 @@ struct ShelfItemDragSource: NSViewRepresentable {
 
         func draggingSession(_ session: NSDraggingSession,
                              sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-            context == .outsideApplication ? .copy : .move
+            // Outside: copy only, so Finder never moves the original. Inside: move (copy allowed so any
+            // in-app drop target accepts it); the shelf removes the item on any non-empty operation.
+            context == .outsideApplication ? .copy : [.move, .copy]
         }
 
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
             onDragEnded?(operation)
+            Self.activeSession = nil
         }
     }
 }

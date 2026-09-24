@@ -3,12 +3,8 @@ import SwiftData
 
 struct TaskPanelView: View {
     let taskID: UUID
-    @Environment(\.modelContext) private var modelContext
     @Environment(PanelCoordinator.self) private var coordinator
-    @Environment(TimerManager.self) private var timerManager
     @Query private var matches: [BunnyTask]
-    @Query private var parents: [BunnyTask]
-    @Query private var children: [BunnyTask]
     @State private var titleDraft = ""
     @FocusState private var focus: Field?
     private enum Field { case title, description }
@@ -16,14 +12,12 @@ struct TaskPanelView: View {
     init(taskID: UUID) {
         self.taskID = taskID
         _matches = Query(filter: #Predicate<BunnyTask> { $0.id == taskID })
-        _children = Query(filter: #Predicate<BunnyTask> { $0.parentID == taskID && $0.archivedAt == nil },
-                          sort: [SortDescriptor(\BunnyTask.sortOrder), SortDescriptor(\BunnyTask.createdAt)])
-        _parents = Query()
     }
 
     var body: some View {
         Group {
-            if let task = matches.first {
+            // Archived tasks count as missing: the panel shows nothing for them.
+            if let task = matches.first, task.archivedAt == nil {
                 content(task)
             } else {
                 Color.clear
@@ -38,9 +32,8 @@ struct TaskPanelView: View {
     private func content(_ task: BunnyTask) -> some View {
         @Bindable var task = task
         VStack(alignment: .leading, spacing: 12) {
-            if let pid = task.parentID, let parent = parents.first(where: { $0.id == pid }) {
-                Label(parent.title, systemImage: "arrow.turn.left.up")
-                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            if let pid = task.parentID {
+                ParentBreadcrumb(parentID: pid)
             }
             TextField("Title", text: $titleDraft, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -50,7 +43,8 @@ struct TaskPanelView: View {
                 .onSubmit { commitTitle(task) }
                 .onAppear { titleDraft = task.title }
                 .onChange(of: focus) { old, _ in if old == .title { commitTitle(task) } }
-            metaLine(task)
+                .onChange(of: task.title) { _, new in if focus != .title { titleDraft = new } }
+            PanelMetaLine(task: task)
             ZStack(alignment: .topLeading) {
                 if task.taskDescription.isEmpty {
                     Text("Add a description…").font(.system(size: 13)).foregroundStyle(.tertiary)
@@ -67,10 +61,63 @@ struct TaskPanelView: View {
             agentSection(task)
         }
         .padding(16)
+        .onDisappear {
+            // Switching task (new `.id`) or archiving tears this view down without a focus change:
+            // keep an in-progress title and release the coordinator's editing hold.
+            // Skip deleted models: reading a deleted model's attributes can trap.
+            if task.modelContext != nil, !task.isDeleted, titleDraft != task.title { commitTitle(task) }
+            coordinator.setEditing(false)
+        }
     }
 
+    /// Spec B mounts the agent status / questions UI here.
     @ViewBuilder
-    private func metaLine(_ task: BunnyTask) -> some View {
+    private func agentSection(_ task: BunnyTask) -> some View {
+        EmptyView()
+    }
+
+    private func commitTitle(_ task: BunnyTask) {
+        let trimmed = titleDraft.components(separatedBy: .newlines).joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            titleDraft = task.title
+        } else {
+            if task.title != trimmed { task.title = trimmed }
+            titleDraft = trimmed
+        }
+    }
+}
+
+/// "In <parent>" breadcrumb for subtasks; queries only the parent row.
+private struct ParentBreadcrumb: View {
+    @Query private var parents: [BunnyTask]
+
+    init(parentID: UUID) {
+        _parents = Query(filter: #Predicate<BunnyTask> { $0.id == parentID })
+    }
+
+    var body: some View {
+        if let parent = parents.first {
+            Label(parent.title, systemImage: "arrow.turn.left.up")
+                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+}
+
+/// Timer state and subtask progress. Its own view so the 1 s timer tick only re-renders this line.
+private struct PanelMetaLine: View {
+    let task: BunnyTask
+    @Environment(TimerManager.self) private var timerManager
+    @Query private var children: [BunnyTask]
+
+    init(task: BunnyTask) {
+        self.task = task
+        let taskID = task.id
+        _children = Query(filter: #Predicate<BunnyTask> { $0.parentID == taskID && $0.archivedAt == nil },
+                          sort: [SortDescriptor(\BunnyTask.sortOrder), SortDescriptor(\BunnyTask.createdAt)])
+    }
+
+    var body: some View {
         let _ = timerManager.tick
         HStack(spacing: 10) {
             if task.isTimerRunning {
@@ -87,16 +134,5 @@ struct TaskPanelView: View {
         }
         .font(.system(size: 11)).foregroundStyle(.secondary)
         .labelStyle(.titleAndIcon)
-    }
-
-    /// Spec B mounts the agent status / questions UI here.
-    @ViewBuilder
-    private func agentSection(_ task: BunnyTask) -> some View {
-        EmptyView()
-    }
-
-    private func commitTitle(_ task: BunnyTask) {
-        let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { titleDraft = task.title } else { task.title = trimmed }
     }
 }

@@ -55,6 +55,7 @@ struct ShelfView: View {
 
     private func row(_ item: ShelfItem) -> some View {
         let url = ShelfService.resolve(item)
+        let context = modelContext
         return HStack(spacing: 8) {
             Group {
                 if let url {
@@ -78,16 +79,20 @@ struct ShelfView: View {
         .overlay(
             ShelfItemDragSource(
                 url: url,
-                onDragEnded: { op in if !op.isEmpty { ShelfService.remove(item, in: modelContext) } },
+                toolTip: item.lastKnownPath,
+                onDragEnded: { op in
+                    // The row may be gone by now (panel switched task): don't rely on its environment.
+                    guard !op.isEmpty, !item.isDeleted else { return }
+                    ShelfService.remove(item, in: item.modelContext ?? context)
+                },
                 onDoubleClick: { if let url { NSWorkspace.shared.open(url) } },
-                menu: { menu(for: item, url: url) },
+                menu: { menu(for: item, url: url, context: context) },
                 onHover: { hoveredID = $0 ? item.id : (hoveredID == item.id ? nil : hoveredID) }
             )
         )
-        .help(item.lastKnownPath)
     }
 
-    private func menu(for item: ShelfItem, url: URL?) -> NSMenu {
+    private func menu(for item: ShelfItem, url: URL?, context: ModelContext) -> NSMenu {
         let menu = NSMenu()
         if let url {
             menu.addItem(ClosureMenuItem("Open") { NSWorkspace.shared.open(url) })
@@ -98,7 +103,7 @@ struct ShelfView: View {
             })
             menu.addItem(.separator())
         }
-        menu.addItem(ClosureMenuItem("Remove from Shelf") { ShelfService.remove(item, in: modelContext) })
+        menu.addItem(ClosureMenuItem("Remove from Shelf") { ShelfService.remove(item, in: context) })
         return menu
     }
 }

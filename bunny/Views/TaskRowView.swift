@@ -224,6 +224,8 @@ struct TaskRowView: View {
     }
 
     private func archiveTask() {
+        // The row is about to vanish without a hover exit; release it so the panel can hide.
+        coordinator.rowExited(task.id)
         task.archivedAt = Date()
         if task.isPinned {
             task.isPinned = false
