@@ -151,6 +151,29 @@ final class AgentProcess {
         }
     }
 
+    /// Synchronous variant for app quit, where no timer would ever fire: SIGTERM to the group, a
+    /// bounded wait (`grace`, default 0.2 s) for the leader to exit, then SIGKILL to the group.
+    /// Also cleans up a group whose leader already exited but whose members still hold the pipes.
+    /// Blocks the calling thread for at most `grace`.
+    func terminateNow(grace: TimeInterval = 0.2) {
+        guard started, !didExit else { return }
+        let pid = process.processIdentifier
+        guard pid > 0 else { return }
+        if process.isRunning {
+            Self.signalGroup(pid, SIGTERM)
+            let deadline = Date().addingTimeInterval(grace)
+            while process.isRunning && Date() < deadline {
+                usleep(10_000)
+            }
+        }
+        if process.isRunning {
+            Self.signalGroup(pid, SIGKILL)
+        } else {
+            // Group only: the leader's own pid may already be reused.
+            kill(-pid, SIGKILL)
+        }
+    }
+
     /// Signals process group `pid`, falling back to the process itself if it isn't a group leader.
     /// Only call while the leader is known to be alive (so `pid` can't have been reused).
     private static func signalGroup(_ pid: pid_t, _ signal: Int32) {

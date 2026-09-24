@@ -99,12 +99,13 @@ final class AgentSupervisor {
         pendingLaunches.removeAll()
         wrapUps.removeAll()
         exitWaiters.removeAll()
+        // Synchronous: the app is about to exit, so terminate()'s delayed SIGKILL would never run.
         for runner in terminating.values {
-            runner.terminate()
+            runner.terminateNow()
         }
         terminating.removeAll()
         for (taskID, runner) in live {
-            runner.terminate()
+            runner.terminateNow()
             if let task = task(with: taskID), task.runState == .running {
                 task.runState = .stopped
                 task.agentActivity = "Interrupted — Bunny quit"

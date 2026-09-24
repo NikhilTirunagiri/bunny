@@ -160,6 +160,46 @@ struct AgentProcessTests {
         #expect(await waitUntil(timeout: 5) { !isAlive(grandchild) })
     }
 
+    @Test func terminateNowKillsTERMIgnoringGroupSynchronously() async throws {
+        let leaderFile = temporaryPath("now-leader")
+        let childFile = temporaryPath("now-child")
+        defer {
+            try? FileManager.default.removeItem(atPath: leaderFile)
+            try? FileManager.default.removeItem(atPath: childFile)
+        }
+        // Both the leader and its grandchild ignore SIGTERM: only the group SIGKILL ends them.
+        let script = "trap '' TERM; (trap '' TERM; exec sleep 60) >/dev/null 2>&1 & echo $! > '\(childFile)'; echo $$ > '\(leaderFile)'; wait"
+        let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", script], cwd: NSTemporaryDirectory(), environment: env)
+        try process.start()
+
+        #expect(await waitUntil { readPID(leaderFile) != nil && readPID(childFile) != nil })
+        let leader = try #require(readPID(leaderFile))
+        let grandchild = try #require(readPID(childFile))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let started = Date()
+        process.terminateNow()
+        // Returns after the bounded grace, not terminate()'s 3 s timer.
+        #expect(Date().timeIntervalSince(started) < 1)
+        // SIGKILL was already sent: both die well before terminate()'s 3 s escalation could fire.
+        #expect(await waitUntil(timeout: 1) { !isAlive(leader) && !isAlive(grandchild) })
+    }
+
+    @Test func terminateNowKillsGrandchildWhenLeaderObeysTERM() async throws {
+        let pidFile = temporaryPath("now-stubborn")
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        let script = "(trap '' TERM; exec sleep 60) >/dev/null 2>&1 & echo $! > '\(pidFile)'; wait"
+        let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", script], cwd: NSTemporaryDirectory(), environment: env)
+        try process.start()
+
+        #expect(await waitUntil { readPID(pidFile) != nil })
+        let grandchild = try #require(readPID(pidFile))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        process.terminateNow()
+        #expect(await waitUntil(timeout: 1) { !isAlive(grandchild) })
+    }
+
     @Test func deliversFinalUnterminatedLineAtEOF() async throws {
         let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", #"printf '{"a":1}\n{"last":true}'"#], cwd: NSTemporaryDirectory(), environment: env)
         var lines: [String] = []

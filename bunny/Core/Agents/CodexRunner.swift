@@ -82,6 +82,12 @@ final class CodexRunner: AgentRunner {
         process.terminate()
     }
 
+    func terminateNow() {
+        guard let process else { return }
+        terminationRequested = true
+        process.terminateNow()
+    }
+
     // MARK: - Private
 
     private func startNextQueuedTurn() {

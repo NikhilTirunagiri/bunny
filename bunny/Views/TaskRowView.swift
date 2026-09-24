@@ -234,6 +234,7 @@ struct TaskRowView: View {
         if !trimmed.isEmpty {
             task.title = trimmed
         } else if task.title.isEmpty {
+            AgentSupervisor.shared.taskWillArchiveOrDelete(task.id)
             ShelfService.removeAll(for: task.id, in: modelContext)
             modelContext.delete(task)
         }
@@ -242,6 +243,7 @@ struct TaskRowView: View {
 
     private func cancelEdit() {
         if task.title.isEmpty {
+            AgentSupervisor.shared.taskWillArchiveOrDelete(task.id)
             ShelfService.removeAll(for: task.id, in: modelContext)
             modelContext.delete(task)
         }
@@ -300,7 +302,10 @@ struct TaskRowView: View {
                 predicate: #Predicate { $0.parentID == parentID }
             )
             if let subtasks = try? modelContext.fetch(descriptor) {
-                for sub in subtasks { sub.archivedAt = task.archivedAt }
+                for sub in subtasks {
+                    AgentSupervisor.shared.taskWillArchiveOrDelete(sub.id)
+                    sub.archivedAt = task.archivedAt
+                }
             }
         }
     }
