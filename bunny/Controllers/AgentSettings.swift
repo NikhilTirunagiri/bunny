@@ -10,7 +10,15 @@ enum AgentSettings {
         static let autonomy = "agent.autonomy"
         static let openIn = "agent.openIn"
         static let defaultWorkspace = "agent.defaultWorkspace"
+        static let claudeModel = "agent.claude.model"
+        static let claudeEffort = "agent.claude.effort"
+        static let codexModel = "agent.codex.model"
+        static let codexEffort = "agent.codex.effort"
+        static let toolsToken = "bunnyTools.token"
+        static let toolsPort = "bunnyTools.port"
     }
+
+    static let defaultToolsPort = 47823
 
     private static var defaults: UserDefaults { .standard }
 
@@ -63,6 +71,81 @@ enum AgentSettings {
         }
     }
 
+    // MARK: - Model & effort (spec §2)
+
+    /// The default model for runs of `harness` ("" = the CLI's default).
+    static func model(for harness: AgentHarness) -> String {
+        trimmedString(harness == .claudeCode ? Key.claudeModel : Key.codexModel)
+    }
+
+    static func setModel(_ model: String, for harness: AgentHarness) {
+        defaults.set(model.trimmingCharacters(in: .whitespacesAndNewlines),
+                     forKey: harness == .claudeCode ? Key.claudeModel : Key.codexModel)
+    }
+
+    /// The default reasoning effort for runs of `harness` ("" = the CLI's default).
+    static func effort(for harness: AgentHarness) -> String {
+        trimmedString(harness == .claudeCode ? Key.claudeEffort : Key.codexEffort)
+    }
+
+    static func setEffort(_ effort: String, for harness: AgentHarness) {
+        defaults.set(effort.trimmingCharacters(in: .whitespacesAndNewlines),
+                     forKey: harness == .claudeCode ? Key.claudeEffort : Key.codexEffort)
+    }
+
+    /// What `task`'s next run uses (`RunSettingsResolver`): the harness from `requestedHarness`, else the
+    /// task's chosen one, else the default; the task's model/effort only when chosen for that harness.
+    static func runSettings(for task: BunnyTask, requestedHarness: AgentHarness? = nil) -> RunSettings {
+        RunSettingsResolver.resolve(
+            requestedHarness: requestedHarness,
+            taskHarness: task.agentHarness,
+            taskModel: task.agentModel,
+            taskEffort: task.agentEffort,
+            defaultHarness: defaultHarness,
+            settingsModel: { model(for: $0) },
+            settingsEffort: { effort(for: $0) }
+        )
+    }
+
+    // MARK: - Bunny tools (spec §5)
+
+    /// The port Bunny's MCP server tries first (default 47823). Not editable in the UI (spec §5 deviation).
+    /// The server may end up on another port when this one is taken; `toolsURL` always has the actual one.
+    static var toolsPort: Int {
+        get {
+            let stored = defaults.integer(forKey: Key.toolsPort)
+            return (1...65_535).contains(stored) ? stored : defaultToolsPort
+        }
+        set { defaults.set(newValue, forKey: Key.toolsPort) }
+    }
+
+    /// Bearer token for the MCP server: 32 random bytes as 64 hex chars, generated on first read.
+    /// Never log it.
+    static var toolsToken: String {
+        if let stored = defaults.string(forKey: Key.toolsToken), stored.count == 64 {
+            return stored
+        }
+        let token = randomHexToken(byteCount: 32)
+        defaults.set(token, forKey: Key.toolsToken)
+        return token
+    }
+
+    /// Replaces the token with a new random one. The server must restart to use it, and global installs
+    /// keep the old token until they are reinstalled.
+    static func regenerateToolsToken() {
+        defaults.set(randomHexToken(byteCount: 32), forKey: Key.toolsToken)
+    }
+
+    /// The URL of the running server (its actual port), for runs Bunny launches.
+    static var toolsURL: String {
+        "http://127.0.0.1:\(BunnyToolsServer.shared.port ?? toolsPort)/mcp"
+    }
+
+    /// The URL written by the global install: always the fixed `toolsPort`, never a fallback port.
+    static var globalToolsURL: String {
+        "http://127.0.0.1:\(toolsPort)/mcp"
+    }
+
     static func commandName(for harness: AgentHarness) -> String {
         switch harness {
         case .claudeCode: return "claude"
@@ -86,8 +169,8 @@ enum AgentSettings {
     }
 
     /// At launch: warms the login-shell PATH on a background queue and stores the location of each CLI
-    /// whose path isn't set yet. Never overwrites a path the owner set.
-    static func warmUp() {
+    /// whose path isn't set yet. Never overwrites a path the owner set. `completion` runs on main after.
+    static func warmUp(completion: (@MainActor @Sendable () -> Void)? = nil) {
         let missing = AgentHarness.allCases.filter { cliPath(for: $0).isEmpty }
         let names = missing.map { ($0, commandName(for: $0)) }
         DispatchQueue.global(qos: .utility).async {
@@ -98,6 +181,7 @@ enum AgentSettings {
                     for (harness, path) in found where cliPath(for: harness).isEmpty {
                         setCLIPath(path, for: harness)
                     }
+                    completion?()
                 }
             }
         }
@@ -121,6 +205,16 @@ enum AgentSettings {
     }
 
     // MARK: - Private
+
+    private static func trimmedString(_ key: String) -> String {
+        defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private static func randomHexToken(byteCount: Int) -> String {
+        var generator = SystemRandomNumberGenerator()
+        return (0..<byteCount).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max, using: &generator)) }
+            .joined()
+    }
 
     /// The trimmed, tilde-expanded stored path, or "".
     private static func storedPath(_ key: String) -> String {

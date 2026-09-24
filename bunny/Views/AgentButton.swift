@@ -5,48 +5,59 @@ extension Color {
     static var agentNeedsInput: Color { .yellow.mix(with: .orange, by: 0.35) }
 }
 
-/// The agent handoff button shown on parent-task rows: hands off to the default
-/// harness, or opens the live/last session, and offers the full agent menu.
+/// The agent handoff button shown on parent-task rows: hands off to the default (or task's chosen)
+/// harness, or opens the live/last session, and offers the full agent config menu on right-click.
 struct AgentButton: View {
     @Bindable var task: BunnyTask
 
-    private var harness: AgentHarness {
-        task.harness ?? AgentSettings.defaultHarness
+    /// Bunny tools reach sessions Bunny runs itself; a session reopened in a terminal only sees them via
+    /// the global install.
+    static let sessionToolsNote = "Bunny tools are available in the opened session only if they're " +
+        "installed globally (Settings → Agents → Bunny tools)."
+
+    private var runSettings: RunSettings { AgentSettings.runSettings(for: task) }
+    private var harness: AgentHarness { runSettings.harness }
+
+    private var statusDotColor: Color? {
+        switch task.runState {
+        case .running: return Color.accentColor
+        case .needsInput: return Color.agentNeedsInput
+        case .finished: return Color.green
+        case .failed: return Color.red
+        default: return nil
+        }
     }
 
-    private var tint: AnyShapeStyle {
-        switch task.runState {
-        case .running: return AnyShapeStyle(Color.accentColor)
-        case .needsInput: return AnyShapeStyle(Color.agentNeedsInput)
-        case .finished: return AnyShapeStyle(Color.green)
-        case .failed: return AnyShapeStyle(Color.red)
-        default: return AnyShapeStyle(.secondary)
+    /// "Hand off to <harness> · <model> · <effort>" before a session exists, else the open-session hint.
+    private var tooltip: String {
+        guard task.agentSessionID == nil else {
+            return "Open session in \(AgentSettings.openIn.displayName). \(Self.sessionToolsNote)"
         }
+        return "Hand off to \(RunSettingsResolver.caption(runSettings))"
     }
 
     var body: some View {
         Button {
             AgentSupervisor.shared.primaryAction(for: task)
         } label: {
-            Image(systemName: harness.symbolName)
-                .font(.system(size: 11))
-                .foregroundStyle(tint)
-                .symbolEffect(.pulse, isActive: task.runState == .running)
+            ZStack(alignment: .bottomTrailing) {
+                AgentLogo(harness: harness, size: 12)
+                if let statusDotColor {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 5))
+                        .foregroundStyle(statusDotColor)
+                        .symbolEffect(.pulse, isActive: task.runState == .running)
+                        .offset(x: 2, y: 2)
+                }
+            }
         }
         .buttonStyle(.plain)
-        .help(task.agentSessionID == nil
-              ? "Hand off to \(harness.displayName)"
-              : "Open session in \(AgentSettings.openIn.displayName)")
+        .help(tooltip)
         .contextMenu {
-            Button("Start with Claude Code") {
-                AgentSupervisor.shared.start(task, harness: .claudeCode)
+            // Only before a session exists; afterwards only the session items below.
+            if AgentConfigMenu.isAvailable(for: task) {
+                AgentConfigMenu(task: task)
             }
-            .disabled(task.runState.isActive)
-
-            Button("Start with Codex") {
-                AgentSupervisor.shared.start(task, harness: .codex)
-            }
-            .disabled(task.runState.isActive)
 
             if task.agentSessionID != nil {
                 Button("Open Session in \(AgentSettings.openIn.displayName)") {

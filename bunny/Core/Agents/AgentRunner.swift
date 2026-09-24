@@ -1,9 +1,37 @@
 import Foundation
 
+/// Where the agent reaches Bunny's local MCP server ("Bunny tools"). See docs/superpowers/research/mcp-http.md.
+struct BunnyToolsEndpoint: Equatable, Sendable {
+    /// MCP server name as the agents see it; Claude tool names become `mcp__bunny__<tool>`.
+    static let serverName = "bunny"
+    /// Environment variable that carries the token to Codex runs (`bearer_token_env_var`), see `CodexWire`.
+    static let codexTokenEnvironmentVariable = "BUNNY_TOOLS_TOKEN"
+
+    var url: String
+    var token: String
+    /// The task the agent is working on, sent as `X-Bunny-Task` so tools can default to it.
+    var taskID: UUID?
+
+    /// HTTP headers for every MCP request: the bearer token, plus the task id when set.
+    var headers: [String: String] {
+        var headers = ["Authorization": "Bearer \(token)"]
+        if let taskID {
+            headers["X-Bunny-Task"] = taskID.uuidString
+        }
+        return headers
+    }
+}
+
 struct AgentRunOptions: Equatable, Sendable {
     var cliPath: String
     var autonomy: AgentAutonomy
     var environment: [String: String]
+    /// Model id/alias for the CLI; nil or blank means the CLI's default.
+    var model: String? = nil
+    /// Reasoning effort for the CLI; nil or blank means the CLI's default.
+    var effort: String? = nil
+    /// Bunny's MCP server, when the Bunny tools are enabled.
+    var tools: BunnyToolsEndpoint? = nil
 }
 
 /// Drives one agent CLI session in the background. Use from the main thread only.
@@ -55,6 +83,12 @@ enum AgentRunnerText {
             return "\(harness.displayName) not found at \(path) — set its path in Settings."
         }
         return "Couldn't launch \(harness.displayName): \(error.message)"
+    }
+
+    /// `value` trimmed, or nil when it is nil or blank (an empty setting means the CLI default).
+    static func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 
     /// Random alphanumeric id for Claude control requests.

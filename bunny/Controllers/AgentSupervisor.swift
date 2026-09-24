@@ -66,7 +66,10 @@ final class AgentSupervisor {
     /// Called once from AppDelegate. Recovers runs interrupted by quitting Bunny (spec §7).
     func configure(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
-        AgentSettings.warmUp()
+        // Prefetch the Codex model list once the CLI paths are known, so menus have it ready.
+        AgentSettings.warmUp {
+            CodexModelStore.shared.loadIfNeeded()
+        }
 
         let all = (try? modelContainer.mainContext.fetch(FetchDescriptor<BunnyTask>())) ?? []
         for task in all {
@@ -127,7 +130,7 @@ final class AgentSupervisor {
 
     // MARK: - Actions
 
-    /// No session yet → start with the default harness; otherwise open the session (never a duplicate run).
+    /// No session yet → start with the task's resolved harness; otherwise open the session (never a duplicate run).
     func primaryAction(for task: BunnyTask) {
         if task.agentSessionID == nil && !task.runState.isActive {
             start(task, harness: nil)
@@ -136,9 +139,10 @@ final class AgentSupervisor {
         }
     }
 
+    /// `harness` nil = the task's chosen harness, else Settings' default (`AgentSettings.runSettings`).
     func start(_ task: BunnyTask, harness: AgentHarness?) {
         guard context != nil, !task.runState.isActive, !isLive(task.id) else { return }
-        let harness = harness ?? AgentSettings.defaultHarness
+        let harness = AgentSettings.runSettings(for: task, requestedHarness: harness).harness
 
         // A set but unusable path fails right away; an unset one is detected off the main thread below.
         let cliPath = AgentSettings.cliPath(for: harness)
@@ -150,6 +154,11 @@ final class AgentSupervisor {
 
         wrapUps[task.id] = nil
         // A new run is a new session (the previous one, if any, is replaced on `sessionStarted`).
+        if task.harness != harness {
+            // Model/effort overrides belong to the harness they were chosen for.
+            task.agentModel = nil
+            task.agentEffort = nil
+        }
         task.agentHarness = harness.rawValue
         task.agentSessionID = nil
         task.agentQuestionData = nil
@@ -193,7 +202,7 @@ final class AgentSupervisor {
 
         // No live runner (Bunny was restarted, or the process exited). The persisted question's request id
         // belonged to the dead process, so never `runner.answer` it: resume the session with the answer as text.
-        let harness = task.harness ?? AgentSettings.defaultHarness
+        let harness = AgentSettings.runSettings(for: task).harness
         let cliPath = AgentSettings.cliPath(for: harness)
         if !cliPath.isEmpty && !Self.isExecutableFile(cliPath) {
             // Keep the question so the owner can answer again after fixing the path.
@@ -255,7 +264,7 @@ final class AgentSupervisor {
             }
             return
         }
-        let harness = task.harness ?? AgentSettings.defaultHarness
+        let settings = AgentSettings.runSettings(for: task)
         let taskID = task.id
         guard pendingHandoffs.insert(taskID).inserted else { return }
 
@@ -271,12 +280,12 @@ final class AgentSupervisor {
             if let runner = runners.removeValue(forKey: taskID) {
                 retire(runner, interruptFirst: false)
                 whenExited(runner, timeout: Self.handoffExitTimeout) { [weak self] in
-                    self?.launchSession(taskID, harness: harness, sessionID: sessionID)
+                    self?.launchSession(taskID, settings: settings, sessionID: sessionID)
                 }
                 return
             }
         }
-        launchSession(taskID, harness: harness, sessionID: sessionID)
+        launchSession(taskID, settings: settings, sessionID: sessionID)
     }
 
     /// Resets the agent fields of a task that isn't running an agent.
@@ -297,6 +306,8 @@ final class AgentSupervisor {
         task.agentQuestionData = nil
         task.agentStartedAt = nil
         task.agentFinishedAt = nil
+        task.agentModel = nil
+        task.agentEffort = nil
         didChangeState()
     }
 
@@ -362,7 +373,7 @@ final class AgentSupervisor {
             return
         }
 
-        let options = AgentRunOptions(cliPath: cliPath, autonomy: AgentSettings.autonomy, environment: environment)
+        let options = runOptions(for: task, harness: request.harness, cliPath: cliPath, environment: environment)
         let runner: AgentRunner
         switch request.harness {
         case .claudeCode: runner = ClaudeCodeRunner(options: options)
@@ -379,16 +390,31 @@ final class AgentSupervisor {
                      resumeSessionID: request.resumeSessionID, initialMessage: request.initialMessage)
     }
 
-    /// Opens the session in the owner's app and records which app was actually used (or the fallback text).
-    /// Ends the task's `pendingHandoffs` entry once the launch has completed.
-    private func launchSession(_ taskID: UUID, harness: AgentHarness, sessionID: String) {
+    /// Model/effort from `AgentSettings.runSettings` (nil = the CLI's default). Bunny tools are attached only
+    /// while the MCP server is running; the runners mention them in the system appendix then.
+    private func runOptions(for task: BunnyTask, harness: AgentHarness, cliPath: String,
+                            environment: [String: String]) -> AgentRunOptions {
+        let settings = AgentSettings.runSettings(for: task, requestedHarness: harness)
+        let model = settings.model
+        let effort = settings.effort
+        let tools = BunnyToolsServer.shared.isRunning
+            ? BunnyToolsEndpoint(url: AgentSettings.toolsURL, token: AgentSettings.toolsToken, taskID: task.id)
+            : nil
+        return AgentRunOptions(cliPath: cliPath, autonomy: AgentSettings.autonomy, environment: environment,
+                               model: model, effort: effort, tools: tools)
+    }
+
+    /// Opens the session in the owner's app (with the run's model/effort) and records which app was actually
+    /// used (or the fallback text). Ends the task's `pendingHandoffs` entry once the launch has completed.
+    private func launchSession(_ taskID: UUID, settings: RunSettings, sessionID: String) {
         guard let task = task(with: taskID) else {
             pendingHandoffs.remove(taskID)
             return
         }
         let cwd = task.agentWorkingDirectory ?? AgentSettings.defaultWorkspace
         Task { @MainActor [weak self] in
-            let outcome = await SessionLauncher.open(harness: harness, sessionID: sessionID, cwd: cwd)
+            let outcome = await SessionLauncher.open(harness: settings.harness, sessionID: sessionID, cwd: cwd,
+                                                     model: settings.model, effort: settings.effort)
             self?.pendingHandoffs.remove(taskID)
             guard let self, let task = self.task(with: taskID), !task.runState.isActive else { return }
             task.agentActivity = outcome.activityText

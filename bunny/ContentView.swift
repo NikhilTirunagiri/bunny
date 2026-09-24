@@ -10,7 +10,6 @@ struct ContentView: View {
 
     @State private var newTaskTitle = ""
     @State private var activeView: ActiveView = .tasks
-    @State private var dropTargetID: UUID? = nil
 
     @AppStorage("appearance") private var appearance = "system"
 
@@ -70,52 +69,27 @@ struct ContentView: View {
 
     private var taskListView: some View {
         ScrollView {
-            LazyVStack(spacing: 2) {
+            // Rows pad themselves 1 pt above and below (part of their drop target), so the
+            // 2 pt gap between groups comes from the rows and subtasks overlap it away (-2).
+            LazyVStack(spacing: 0) {
                 ForEach(topLevelTasks) { task in
                     let subs = subtasks(of: task)
-                    VStack(spacing: 0) {
+                    // Each row is its own drag source and drop target (TaskRowView / RowDropDelegate);
+                    // subtasks keep their parentID, so a collapsed parent moves with them.
+                    VStack(spacing: -2) {
                         TaskRowView(task: task, hasSubtasks: !subs.isEmpty)
                         if task.isExpanded && !subs.isEmpty {
                             ForEach(subs) { sub in
                                 TaskRowView(task: sub, hasSubtasks: false)
-                                    .padding(.leading, 24)
                             }
                         }
-                    }
-                    .background {
-                        if dropTargetID == task.id {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.08))
-                        }
-                    }
-                    .onDrag {
-                        return NSItemProvider(object: task.id.uuidString as NSString)
-                    }
-                    .dropDestination(for: String.self) { items, _ in
-                        guard let idStr = items.first,
-                              let fromID = UUID(uuidString: idStr),
-                              fromID != task.id else { return false }
-                        moveTask(from: fromID, to: task.id)
-                        dropTargetID = nil
-                        return true
-                    } isTargeted: { targeted in
-                        dropTargetID = targeted ? task.id : nil
                     }
                 }
             }
             .padding(.horizontal, 6)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
         }
         .frame(minHeight: 360)
-    }
-
-    private func moveTask(from fromID: UUID, to toID: UUID) {
-        var tasks = topLevelTasks
-        guard let fromIdx = tasks.firstIndex(where: { $0.id == fromID }),
-              let toIdx   = tasks.firstIndex(where: { $0.id == toID }) else { return }
-        tasks.move(fromOffsets: IndexSet(integer: fromIdx),
-                   toOffset: toIdx > fromIdx ? toIdx + 1 : toIdx)
-        for (i, t) in tasks.enumerated() { t.sortOrder = i }
     }
 
     private var bottomBar: some View {

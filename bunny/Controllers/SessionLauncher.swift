@@ -30,12 +30,15 @@ enum SessionLauncher {
 
     /// Executes SessionLaunchPlanner steps; on failure falls back to the Terminal plan; last resort copies the
     /// resume command to the pasteboard. Waits for `/usr/bin/open` to report success before calling it opened.
-    static func open(harness: AgentHarness, sessionID: String, cwd: String) async -> SessionLaunchOutcome {
+    /// `model`/`effort`: the run's settings, passed on to the resume command (nil = the CLI's default).
+    static func open(harness: AgentHarness, sessionID: String, cwd: String,
+                     model: String? = nil, effort: String? = nil) async -> SessionLaunchOutcome {
         let cliPath = AgentSettings.cliPath(for: harness)
         guard !cliPath.isEmpty, FileManager.default.isExecutableFile(atPath: cliPath) else {
             // Opening a terminal on `exec ''` would just fail there. Hand over a command that works in a login shell.
             let command = SessionLaunchPlanner.resumeCommand(
-                harness: harness, cliPath: AgentSettings.commandName(for: harness), sessionID: sessionID, cwd: cwd)
+                harness: harness, cliPath: AgentSettings.commandName(for: harness), sessionID: sessionID, cwd: cwd,
+                model: model, effort: effort)
             copyToPasteboard(command)
             return .copiedToPasteboard(
                 "\(harness.displayName) not found — set its path in Settings → Agents. Resume command copied: \(command)")
@@ -44,7 +47,8 @@ enum SessionLauncher {
         let app = AgentSettings.openIn
         if app != .terminal {
             if AgentSettings.isInstalled(app) {
-                let steps = SessionLaunchPlanner.plan(app: app, harness: harness, cliPath: cliPath, sessionID: sessionID, cwd: cwd)
+                let steps = SessionLaunchPlanner.plan(app: app, harness: harness, cliPath: cliPath, sessionID: sessionID,
+                                                      cwd: cwd, model: model, effort: effort)
                 do {
                     try await execute(steps)
                     return .opened(app)
@@ -56,7 +60,8 @@ enum SessionLauncher {
             }
         }
 
-        let terminalSteps = SessionLaunchPlanner.plan(app: .terminal, harness: harness, cliPath: cliPath, sessionID: sessionID, cwd: cwd)
+        let terminalSteps = SessionLaunchPlanner.plan(app: .terminal, harness: harness, cliPath: cliPath,
+                                                      sessionID: sessionID, cwd: cwd, model: model, effort: effort)
         do {
             try await execute(terminalSteps)
             return .opened(.terminal)
@@ -64,7 +69,8 @@ enum SessionLauncher {
             logFailure(OpenInApp.terminal.displayName, error)
         }
 
-        let command = SessionLaunchPlanner.resumeCommand(harness: harness, cliPath: cliPath, sessionID: sessionID, cwd: cwd)
+        let command = SessionLaunchPlanner.resumeCommand(harness: harness, cliPath: cliPath, sessionID: sessionID,
+                                                         cwd: cwd, model: model, effort: effort)
         copyToPasteboard(command)
         return .copiedToPasteboard("Couldn't open the app — resume command copied: \(command)")
     }

@@ -198,8 +198,7 @@ private struct AgentRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: harness.symbolName)
-                .font(.title2)
+            AgentLogo(harness: harness, size: 22)
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 3) {

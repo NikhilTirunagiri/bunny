@@ -134,6 +134,142 @@ struct CodexWireTests {
         #expect(rpcError["message"] as? String == "unsupported")
     }
 
+    private static let tools = BunnyToolsEndpoint(
+        url: "http://127.0.0.1:47823/mcp",
+        token: "secret-token",
+        taskID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")
+    )
+    private static let expectedBunnyServer: NSDictionary = [
+        "url": "http://127.0.0.1:47823/mcp",
+        "http_headers": [
+            "Authorization": "Bearer secret-token",
+            "X-Bunny-Task": "11111111-2222-3333-4444-555555555555",
+        ],
+        "bearer_token_env_var": "BUNNY_TOOLS_TOKEN",
+        "default_tools_approval_mode": "approve",
+    ]
+
+    @Test func threadStartWithModelToolsAndRootsMergesConfig() throws {
+        let object = try jsonObject(CodexWire.threadStart(
+            id: 2,
+            cwd: "/tmp/project",
+            approvalPolicy: "never",
+            sandbox: "workspace-write",
+            developerInstructions: "Be concise",
+            writableRoots: ["/tmp/shared"],
+            model: "gpt-6-luna",
+            tools: Self.tools
+        ))
+        let params = try #require(object["params"] as? [String: Any])
+        let config = try #require(params["config"] as? NSDictionary)
+        let expectedConfig: NSDictionary = [
+            "sandbox_workspace_write": ["writable_roots": ["/tmp/shared"]],
+            "mcp_servers": ["bunny": Self.expectedBunnyServer],
+        ]
+
+        #expect(params["model"] as? String == "gpt-6-luna")
+        #expect(params["approvalPolicy"] as? String == "never")
+        #expect(params["sandbox"] as? String == "workspace-write")
+        #expect(config == expectedConfig)
+    }
+
+    @Test func threadStartWithToolsOnlyHasOnlyMCPConfig() throws {
+        let object = try jsonObject(CodexWire.threadStart(
+            id: 2,
+            cwd: "/tmp/project",
+            approvalPolicy: "on-request",
+            sandbox: "workspace-write",
+            developerInstructions: "Be concise",
+            writableRoots: [],
+            model: " ",
+            tools: Self.tools
+        ))
+        let params = try #require(object["params"] as? [String: Any])
+        let config = try #require(params["config"] as? NSDictionary)
+        let expectedConfig: NSDictionary = ["mcp_servers": ["bunny": Self.expectedBunnyServer]]
+
+        #expect(params["model"] == nil)
+        #expect(config == expectedConfig)
+    }
+
+    @Test func threadResumeCarriesModelAndTools() throws {
+        let plain = try jsonObject(CodexWire.threadResume(id: 2, threadID: "th-1"))
+        let plainParams = try #require(plain["params"] as? NSDictionary)
+        let expectedPlain: NSDictionary = ["threadId": "th-1"]
+        #expect(plainParams == expectedPlain)
+
+        let full = try jsonObject(CodexWire.threadResume(id: 2, threadID: "th-1", model: "gpt-6-sol", tools: Self.tools))
+        let fullParams = try #require(full["params"] as? NSDictionary)
+        let expectedFull: NSDictionary = [
+            "threadId": "th-1",
+            "model": "gpt-6-sol",
+            "config": ["mcp_servers": ["bunny": Self.expectedBunnyServer]],
+        ]
+        #expect(fullParams == expectedFull)
+    }
+
+    @Test func turnStartCarriesEffortWhenSet() throws {
+        let withEffort = try jsonObject(CodexWire.turnStart(id: 4, threadID: "th-1", text: "Hi", effort: "high"))
+        let withParams = try #require(withEffort["params"] as? [String: Any])
+        #expect(withParams["effort"] as? String == "high")
+
+        let blank = try jsonObject(CodexWire.turnStart(id: 4, threadID: "th-1", text: "Hi", effort: ""))
+        let blankParams = try #require(blank["params"] as? [String: Any])
+        #expect(blankParams["effort"] == nil)
+
+        let none = try jsonObject(CodexWire.turnStart(id: 4, threadID: "th-1", text: "Hi"))
+        let noneParams = try #require(none["params"] as? [String: Any])
+        #expect(noneParams["effort"] == nil)
+    }
+
+    @Test func parsesMCPElicitationAndEncodesReply() throws {
+        // Captured from codex-cli 0.155.0 (approvalPolicy "on-request", workspace-write) for a bunny tool call.
+        let request = Data(#"{"method": "mcpServer/elicitation/request", "id": 0, "params": {"threadId": "t", "turnId": "u", "serverName": "bunny", "mode": "form", "_meta": {"codex_approval_kind": "mcp_tool_call", "persist": ["session", "always"], "tool_description": "Create a task in Bunny", "tool_params": {"title": "ProbeTask"}}, "message": "Allow the bunny MCP server to run tool \"create_task\"?", "requestedSchema": {"type": "object", "properties": {}}}}"#.utf8)
+        #expect(CodexWire.parse(request) == .mcpElicitation(rpcID: "0", serverName: "bunny"))
+
+        let accept = try jsonObject(CodexWire.elicitationReply(rpcID: "0", accept: true))
+        let result = try #require(accept["result"] as? [String: Any])
+        #expect(accept["id"] as? Int == 0)
+        #expect(result["action"] as? String == "accept")
+        #expect(result["content"] is NSNull)
+        #expect(result["_meta"] is NSNull)
+
+        let decline = try jsonObject(CodexWire.elicitationReply(rpcID: "e-1", accept: false))
+        #expect(decline["id"] as? String == "e-1")
+        #expect((decline["result"] as? [String: Any])?["action"] as? String == "decline")
+    }
+
+    @Test func encodesModelList() throws {
+        let object = try jsonObject(CodexWire.modelList(id: 2))
+        let params = try #require(object["params"] as? NSDictionary)
+        let expected: NSDictionary = ["includeHidden": false]
+        #expect(object["method"] as? String == "model/list")
+        #expect(object["id"] as? Int == 2)
+        #expect(params == expected)
+    }
+
+    @Test func parsesModelListFixture() throws {
+        // Real `model/list` response from codex-cli 0.155.0, trimmed, plus one hidden entry.
+        let line = try #require(try fixture("codex-model-list.json").first)
+        let models = try #require(CodexWire.parseModelList(line))
+        let expected = [
+            CodexModel(id: "gpt-6-astra", displayName: "GPT-6-Astra", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], defaultEffort: "medium", isDefault: true),
+            CodexModel(id: "gpt-6-sol", displayName: "GPT-6-Sol", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], defaultEffort: "medium", isDefault: false),
+            CodexModel(id: "gpt-6-luna", displayName: "GPT-6-Luna", efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium", isDefault: false),
+        ]
+        #expect(models == expected)
+    }
+
+    @Test func parseModelListRejectsNonLists() {
+        let error = Data(#"{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"nope"}}"#.utf8)
+        let other = Data(#"{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"t"}}}"#.utf8)
+        let empty = Data(#"{"id":2,"result":{"data":[],"nextCursor":null}}"#.utf8)
+        #expect(CodexWire.parseModelList(error) == nil)
+        #expect(CodexWire.parseModelList(other) == nil)
+        #expect(CodexWire.parseModelList(Data("garbage".utf8)) == nil)
+        #expect(CodexWire.parseModelList(empty) == [])
+    }
+
     private func fixture(_ name: String) throws -> [Data] {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

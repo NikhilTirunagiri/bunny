@@ -64,4 +64,17 @@ struct AgentPromptBuilderTests {
         #expect(claude.contains("<bunny-subtasks-done>"))
         #expect(codex.contains("<bunny-subtasks-done>"))
     }
+
+    @Test func appendixMentionsBunnyToolsOnlyWhenAvailable() {
+        for harness in [AgentHarness.claudeCode, .codex] {
+            let without = AgentPromptBuilder.systemAppendix(for: harness)
+            let explicitWithout = AgentPromptBuilder.systemAppendix(for: harness, toolsAvailable: false)
+            let with = AgentPromptBuilder.systemAppendix(for: harness, toolsAvailable: true)
+            let expected = without + "\n- " + AgentPromptBuilder.bunnyToolsSentence
+            #expect(without == explicitWithout)
+            #expect(!without.contains("`bunny` tools"))
+            #expect(with == expected)
+            #expect(with.contains("list_tasks, create_task, create_tasks, update_task, complete_task, add_to_shelf"))
+        }
+    }
 }

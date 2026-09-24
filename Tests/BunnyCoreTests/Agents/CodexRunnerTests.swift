@@ -88,6 +88,126 @@ struct CodexRunnerTests {
         }
     }
 
+    private static let tools = BunnyToolsEndpoint(
+        url: "http://127.0.0.1:47823/mcp",
+        token: "secret-token",
+        taskID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")
+    )
+
+    /// Runs one CONFIG turn and returns the fake's echo of the thread/start (or resume) and turn/start params.
+    private func configEcho(_ options: AgentRunOptions, resume: String? = nil, extraDirectories: [String] = []) async throws -> [String: Any] {
+        let runner = CodexRunner(options: options)
+        let recorder = EventRecorder(runner)
+        defer { runner.terminate() }
+
+        let brief = makeBrief(title: "CONFIG check", extraDirectories: extraDirectories)
+        runner.start(brief: brief, harness: .codex, resumeSessionID: resume, initialMessage: resume == nil ? nil : "CONFIG again")
+
+        #expect(await recorder.waitForTurnFinished())
+        let text = try #require(recorder.events.turnsFinished.first?.text)
+        #expect(text.hasPrefix("config: "))
+        let json = String(text.dropFirst("config: ".count))
+        return try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    }
+
+    @Test func codexDefaultsSendNoModelEffortOrTools() async throws {
+        let echo = try await configEcho(FakeCLI.options(cliPath: FakeCLI.codex))
+        let thread = try #require(echo["thread"] as? [String: Any])
+        let turn = try #require(echo["turn"] as? [String: Any])
+        #expect(thread["model"] == nil)
+        #expect(thread["config"] == nil)
+        #expect(thread["approvalPolicy"] as? String == "never")
+        #expect(thread["sandbox"] as? String == "workspace-write")
+        #expect(turn["effort"] == nil)
+        #expect(echo["instructionsMentionBunnyTools"] as? Bool == false)
+        #expect(echo["toolsTokenEnv"] is NSNull)
+    }
+
+    @Test func codexSendsModelEffortAndBunnyTools() async throws {
+        var options = FakeCLI.options(cliPath: FakeCLI.codex)
+        options.model = "gpt-6-luna"
+        options.effort = "high"
+        options.tools = Self.tools
+        let echo = try await configEcho(options, extraDirectories: ["/tmp/extra"])
+        let thread = try #require(echo["thread"] as? [String: Any])
+        let turn = try #require(echo["turn"] as? [String: Any])
+        let config = try #require(thread["config"] as? NSDictionary)
+        let expectedConfig: NSDictionary = [
+            "sandbox_workspace_write": ["writable_roots": ["/tmp/extra"]],
+            "mcp_servers": [
+                "bunny": [
+                    "url": "http://127.0.0.1:47823/mcp",
+                    "http_headers": [
+                        "Authorization": "Bearer secret-token",
+                        "X-Bunny-Task": "11111111-2222-3333-4444-555555555555",
+                    ],
+                    "bearer_token_env_var": "BUNNY_TOOLS_TOKEN",
+                    "default_tools_approval_mode": "approve",
+                ],
+            ],
+        ]
+
+        #expect(thread["model"] as? String == "gpt-6-luna")
+        // Bunny tools never loosen the sandbox or the approval policy.
+        #expect(thread["approvalPolicy"] as? String == "never")
+        #expect(thread["sandbox"] as? String == "workspace-write")
+        #expect(config == expectedConfig)
+        #expect(turn["effort"] as? String == "high")
+        #expect(echo["instructionsMentionBunnyTools"] as? Bool == true)
+        // The token reaches Codex through the variable `bearer_token_env_var` names.
+        #expect(echo["toolsTokenEnv"] as? String == "secret-token")
+    }
+
+    @Test func codexResumeSendsModelToolsAndEffort() async throws {
+        var options = FakeCLI.options(cliPath: FakeCLI.codex)
+        options.model = "gpt-6-sol"
+        options.effort = "low"
+        options.tools = Self.tools
+        let echo = try await configEcho(options, resume: "th-old")
+        let thread = try #require(echo["thread"] as? [String: Any])
+        let turn = try #require(echo["turn"] as? [String: Any])
+        let config = try #require(thread["config"] as? [String: Any])
+
+        #expect(thread["threadId"] as? String == "th-old")
+        #expect(thread["model"] as? String == "gpt-6-sol")
+        #expect((config["mcp_servers"] as? [String: Any])?["bunny"] != nil)
+        #expect(turn["effort"] as? String == "low")
+    }
+
+    @Test func codexAutoAcceptsBunnyElicitationOnly() async throws {
+        let cases: [(String, String)] = [("ELICIT now", "elicitation: accept"), ("ELICIT_OTHER now", "elicitation error: -32601")]
+        for autonomy in [AgentAutonomy.autonomous, .askFirst] {
+            for (title, expected) in cases {
+                var options = FakeCLI.options(cliPath: FakeCLI.codex, autonomy: autonomy)
+                options.tools = Self.tools
+                let runner = CodexRunner(options: options)
+                let recorder = EventRecorder(runner)
+                defer { runner.terminate() }
+
+                runner.start(brief: makeBrief(title: title), harness: .codex, resumeSessionID: nil, initialMessage: nil)
+
+                #expect(await recorder.waitForTurnFinished())
+                #expect(recorder.events.turnsFinished.first?.text == expected)
+                // Never surfaced to the user.
+                #expect(recorder.events.questions.isEmpty)
+            }
+        }
+    }
+
+    @Test func codexRejectsBunnyElicitationWithoutTools() async throws {
+        for autonomy in [AgentAutonomy.autonomous, .askFirst] {
+            let runner = CodexRunner(options: FakeCLI.options(cliPath: FakeCLI.codex, autonomy: autonomy))
+            let recorder = EventRecorder(runner)
+            defer { runner.terminate() }
+
+            runner.start(brief: makeBrief(title: "ELICIT now"), harness: .codex, resumeSessionID: nil, initialMessage: nil)
+
+            #expect(await recorder.waitForTurnFinished())
+            #expect(recorder.events.turnsFinished.first?.text == "elicitation error: -32601")
+            #expect(recorder.events.questions.isEmpty)
+        }
+    }
+
     @Test func codexResumeUsesThreadResumeAndInitialMessage() async throws {
         let runner = CodexRunner(options: FakeCLI.options(cliPath: FakeCLI.codex))
         let recorder = EventRecorder(runner)

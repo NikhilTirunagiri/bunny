@@ -38,7 +38,7 @@ final class CodexRunner: AgentRunner {
             executable: options.cliPath,
             arguments: ["app-server", "--stdio"],
             cwd: brief.workingDirectory,
-            environment: options.environment
+            environment: Self.environment(for: options)
         )
         process.onLine = { [weak self] line in self?.handle(line) }
         process.onExit = { [weak self] code, stderrTail in self?.handleExit(code: code, stderrTail: stderrTail) }
@@ -90,6 +90,15 @@ final class CodexRunner: AgentRunner {
 
     // MARK: - Private
 
+    /// The run's environment, plus the Bunny tools token in the variable the MCP config names.
+    static func environment(for options: AgentRunOptions) -> [String: String] {
+        var environment = options.environment
+        if let tools = options.tools {
+            environment[BunnyToolsEndpoint.codexTokenEnvironmentVariable] = tools.token
+        }
+        return environment
+    }
+
     private func startNextQueuedTurn() {
         guard threadReady, !turnInFlight, let threadID = sessionID, let process, !queuedMessages.isEmpty else { return }
         let text = queuedMessages.removeFirst()
@@ -99,7 +108,7 @@ final class CodexRunner: AgentRunner {
         currentTurnID = nil
         messageDelta = ""
         lastMessage = ""
-        process.write(CodexWire.turnStart(id: id, threadID: threadID, text: text))
+        process.write(CodexWire.turnStart(id: id, threadID: threadID, text: text, effort: options.effort))
     }
 
     private func takeRequestID() -> Int {
@@ -136,6 +145,15 @@ final class CodexRunner: AgentRunner {
                 method: method,
                 rawInput: nil
             )))
+        case let .mcpElicitation(rpcID, serverName):
+            if serverName == BunnyToolsEndpoint.serverName, options.tools != nil {
+                // Codex's approval prompt for a Bunny tool call (seen under "on-request"). Bunny tools this
+                // run attached are always allowed, like Claude's `--allowedTools mcp__bunny`; a "bunny"
+                // server from elsewhere (no tools on this run) is not.
+                process?.write(CodexWire.elicitationReply(rpcID: rpcID, accept: true))
+            } else {
+                process?.write(CodexWire.methodNotFound(rpcID: rpcID))
+            }
         case let .unsupportedRequest(rpcID):
             process?.write(CodexWire.methodNotFound(rpcID: rpcID))
         case .ignored:
@@ -153,15 +171,22 @@ final class CodexRunner: AgentRunner {
             guard let launch else { return }
             process?.write(CodexWire.initialized())
             if let resumeSessionID = launch.resumeSessionID {
-                process?.write(CodexWire.threadResume(id: Self.threadID, threadID: resumeSessionID))
+                process?.write(CodexWire.threadResume(
+                    id: Self.threadID,
+                    threadID: resumeSessionID,
+                    model: options.model,
+                    tools: options.tools
+                ))
             } else {
                 process?.write(CodexWire.threadStart(
                     id: Self.threadID,
                     cwd: launch.brief.workingDirectory,
                     approvalPolicy: options.autonomy == .autonomous ? "never" : "on-request",
                     sandbox: "workspace-write",
-                    developerInstructions: AgentPromptBuilder.systemAppendix(for: launch.harness),
-                    writableRoots: launch.brief.extraDirectories
+                    developerInstructions: AgentPromptBuilder.systemAppendix(for: launch.harness, toolsAvailable: options.tools != nil),
+                    writableRoots: launch.brief.extraDirectories,
+                    model: options.model,
+                    tools: options.tools
                 ))
             }
 
