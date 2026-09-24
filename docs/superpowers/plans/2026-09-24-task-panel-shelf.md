@@ -256,6 +256,7 @@ struct HoverIntentTests {
     @Test func editingBlocksHide() {
         var h = HoverIntent()
         _ = h.rowEntered(a, now: t0); _ = h.tick(now: t0.addingTimeInterval(0.4))
+        h.rowExited(a, now: t0.addingTimeInterval(0.9))
         h.panelEntered()
         h.setEditing(true, now: t0.addingTimeInterval(1))
         h.panelExited(now: t0.addingTimeInterval(2))
