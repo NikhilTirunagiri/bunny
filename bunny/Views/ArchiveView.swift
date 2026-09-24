@@ -168,11 +168,13 @@ struct ArchiveView: View {
         task.archivedAt = nil
         task.isCompleted = false
         task.completedAt = nil
+        task.completedByAgent = false
         if task.isTimerExpired { task.timerStartedAt = nil }
         for sub in subs {
             sub.archivedAt = nil
             sub.isCompleted = false
             sub.completedAt = nil
+            sub.completedByAgent = false
             if sub.isTimerExpired { sub.timerStartedAt = nil }
         }
     }
