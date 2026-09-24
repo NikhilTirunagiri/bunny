@@ -547,8 +547,6 @@ Note: on macOS `/tmp` resolves to `/private/tmp`; `duplicateSamePath` normalizes
 ```swift
 @Model final class ShelfItem { id, taskID, bookmark, displayName, lastKnownPath, isDirectory, addedAt, sortOrder
     init(taskID: UUID, bookmark: Data, url: URL, isDirectory: Bool, sortOrder: Int) }
-struct ResolvedShelfItem { let item: ShelfItem; let url: URL?   // nil = missing
-    var isMissing: Bool { url == nil } }
 @MainActor enum ShelfService {
     @discardableResult static func add(_ urls: [URL], to taskID: UUID, in context: ModelContext) -> Int   // number added
     static func items(for taskID: UUID, in context: ModelContext) -> [ShelfItem]   // sorted by sortOrder

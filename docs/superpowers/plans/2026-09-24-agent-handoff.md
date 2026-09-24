@@ -20,6 +20,8 @@ Protocol references: `docs/superpowers/research/claude-stream-json.md`, `codex-a
 
 ## Global Constraints
 
+- App target build setting `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` (Swift 5 mode): Core files compiled into the app are implicitly `@MainActor` there, but nonisolated under SwiftPM. Write Core code that is correct under both: background work only inside closures handed to `DispatchQueue`/`Process` handlers that touch lock-protected or queue-confined state, and every callback to clients hops to `DispatchQueue.main`. Do not use `nonisolated` on type declarations (the CLT compiler is Swift 6.1).
+
 - `bunny/Core/**`: Foundation only (no SwiftUI/AppKit/SwiftData). Swift 5 language mode. Everything `internal` (tests use `@testable import BunnyCore`).
 - The Xcode project auto-includes new files under `bunny/`. Do not edit `project.pbxproj`.
 - No Xcode on this machine: app-target code (outside `bunny/Core`) cannot be compiled. Self-review every API against the macOS 26 SDK. Core code MUST pass `swift test`.
@@ -398,18 +400,18 @@ final class CodexRunner: AgentRunner { init(options: AgentRunOptions) }
   - Message text containing `ASK` → a `can_use_tool` AskUserQuestion request (`request_id "r1"`, a question "Pick one?" with options A/B). It waits for the `control_response`, then prints a `result` whose text is `"answered: <answers json>"`.
   - Message containing `FAIL` → exits with code 3 after writing `boom` to stderr.
   - Otherwise → an assistant text `"working"`, then result success `"done: <text>"`.
-  - `argv` is echoed to stderr for assertions.
+  - Every `result` text ends with `" | argv=" + json.dumps(sys.argv[1:])` so tests can assert the flags.
 - `fake_codex.py`: minimal JSON-RPC server for `initialize`, `thread/start` (`thread.id "th-1"`) and `turn/start`.
   - Text containing `QUESTION` → agentMessage `"Need info\n<bunny-question>{\"question\":\"Which DB?\",\"options\":[\"pg\",\"sqlite\"]}</bunny-question>"`, then `turn/completed completed`.
   - Otherwise → agentMessage `"done: <text>"`, then completed.
-- Tests pass `cliPath` = `"/usr/bin/env"`-style? No. Make the fake scripts executable with `#!/usr/bin/env python3`, chmod 755 in the test setup, and pass their path as `cliPath`. `CodexRunner` passes `["app-server","--stdio"]`, which the fake ignores.
+- Make the fake scripts executable with `#!/usr/bin/env python3`, chmod 755 in the test setup, and pass their path as `cliPath`. `CodexRunner` passes `["app-server","--stdio"]`, which the fake ignores.
 
 - [ ] **Step 1: Write the fake CLIs and failing tests.** Use an `AsyncStream`/expectation helper that collects events until a predicate or a 10 s timeout. Tests:
   - `claudeHappyPath`: events contain `sessionStarted("sess-1")`, `activity("working")` and `turnFinished("done: …", true)`.
   - `claudeAskAndAnswer`: a question with `kind .choices` and key `"Pick one?"`. Answer `["Pick one?": ["B"]]` → `turnFinished` text contains `"Pick one?"` and `"B"`.
   - `claudeProcessFailure`: `FAIL` → `failed` containing `"boom"`, then `exited(3)`.
   - `claudeMissingCLI`: cliPath `/nonexistent` → `failed` event, no crash.
-  - `claudeArgvIncludesAddDirAndMode`: check stderr/argv via a brief with extraDirectories, and autonomy `.askFirst` → `acceptEdits`.
+  - `claudeArgvIncludesAddDirAndMode`: a brief with extraDirectories and autonomy `.askFirst` → the result text's `argv=` part contains `--add-dir`, that directory, and `acceptEdits`.
   - `codexHappyPath`: `sessionStarted("th-1")`, `turnFinished("done: …", true)`.
   - `codexMarkerQuestionThenAnswer`: question `.choices` with options pg/sqlite. `answer(["answer": ["sqlite"]])` → the next `turnFinished` text contains `"sqlite"`.
 - [ ] **Step 2:** `swift test --filter Runner` → FAIL.
