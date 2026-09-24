@@ -26,6 +26,35 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         return img
     }()
 
+    /// Shown while an agent needs input: the hare in `labelColor` plus a yellow dot (non-template, so the dot keeps its color).
+    private static let attentionIcon: NSImage? = {
+        guard let symbol = menuBarIcon else { return nil }
+        let size = symbol.size
+        let dotDiameter: CGFloat = 6
+        let image = NSImage(size: size, flipped: false) { rect in
+            symbol.draw(in: rect)
+            // Tint the template's alpha mask with the current appearance's label color.
+            NSColor.labelColor.set()
+            rect.fill(using: .sourceAtop)
+
+            let dot = NSRect(x: rect.maxX - dotDiameter, y: rect.maxY - dotDiameter, width: dotDiameter, height: dotDiameter)
+            // Punch a thin gap around the dot so it reads against the filled circle.
+            NSGraphicsContext.current?.compositingOperation = .clear
+            NSBezierPath(ovalIn: dot.insetBy(dx: -1, dy: -1)).fill()
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            NSColor.systemYellow.set()
+            NSBezierPath(ovalIn: dot).fill()
+            return true
+        }
+        image.isTemplate = false
+        image.accessibilityDescription = "Bunny — an agent needs your input"
+        return image
+    }()
+
+    private var currentIcon: NSImage? {
+        AgentSupervisor.shared.attentionCount > 0 ? (Self.attentionIcon ?? Self.menuBarIcon) : Self.menuBarIcon
+    }
+
     func setup(modelContainer: ModelContainer) {
         modelContext = modelContainer.mainContext
 
@@ -181,14 +210,14 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     }
 
     private func setDefault(_ button: NSStatusBarButton) {
-        button.image = Self.menuBarIcon
+        button.image = currentIcon
         button.imagePosition = .imageOnly
         button.attributedTitle = attributed("")
         clearGreen(button)
     }
 
     private func setPinned(_ button: NSStatusBarButton, title: String) {
-        button.image = Self.menuBarIcon
+        button.image = currentIcon
         button.imagePosition = .imageLeft
         button.attributedTitle = attributed(title)
     }
