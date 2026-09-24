@@ -51,6 +51,37 @@ struct SessionLaunchPlannerTests {
         #expect(result == expected)
     }
 
+    @Test("resumeCommand: claudeCode with model and effort")
+    func resumeCommand_claudeCodeModelEffort() {
+        let result = SessionLaunchPlanner.resumeCommand(
+            harness: .claudeCode, cliPath: "/c", sessionID: "id1", cwd: "/w", model: "opus", effort: "high")
+        #expect(result == "cd '/w' && exec '/c' --resume 'id1' --model 'opus' --effort 'high'")
+    }
+
+    @Test("resumeCommand: codex with model and effort")
+    func resumeCommand_codexModelEffort() {
+        let result = SessionLaunchPlanner.resumeCommand(
+            harness: .codex, cliPath: "/x", sessionID: "id2", cwd: "/w", model: "gpt-6-luna", effort: "low")
+        #expect(result == "cd '/w' && exec '/x' resume -m 'gpt-6-luna' -c 'model_reasoning_effort=\"low\"' 'id2'")
+    }
+
+    @Test("resumeCommand: blank model/effort are omitted")
+    func resumeCommand_blankModelEffort() {
+        let claude = SessionLaunchPlanner.resumeCommand(
+            harness: .claudeCode, cliPath: "/c", sessionID: "id1", cwd: "/w", model: " ", effort: nil)
+        #expect(claude == "cd '/w' && exec '/c' --resume 'id1'")
+        let codex = SessionLaunchPlanner.resumeCommand(
+            harness: .codex, cliPath: "/x", sessionID: "id2", cwd: "/w", model: nil, effort: "")
+        #expect(codex == "cd '/w' && exec '/x' resume 'id2'")
+    }
+
+    @Test("plan: terminal script carries model and effort")
+    func plan_terminalModelEffort() {
+        let steps = SessionLaunchPlanner.plan(
+            app: .terminal, harness: .codex, cliPath: "/x", sessionID: "id2", cwd: "/w", model: "m", effort: "high")
+        #expect(steps == [.runCommandFile(script: "#!/bin/zsh -l\ncd '/w' && exec '/x' resume -m 'm' -c 'model_reasoning_effort=\"high\"' 'id2'\n")])
+    }
+
     @Test("resumeCommand: claudeCode with cwd with space and quote")
     func resumeCommand_claudeCodeCwdWithSpaceAndQuote() {
         let result = SessionLaunchPlanner.resumeCommand(

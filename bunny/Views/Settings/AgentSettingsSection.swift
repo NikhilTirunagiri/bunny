@@ -17,11 +17,8 @@ struct AgentSettingsSection: View {
     // MARK: - Model & effort (spec §2)
 
     private static let customKey = "__custom__"
-    private static let claudeModelChoices = ["", "fable", "opus", "sonnet", "haiku", customKey]
-    private static let efforts = ["", "low", "medium", "high", "xhigh", "max"]
-    /// Fallback efforts when the Codex model is Default or Custom (no fetched `CodexModel` to read
-    /// `supportedReasoningEfforts` from).
-    private static let codexFallbackEfforts = ["low", "medium", "high"]
+    private static let claudeModelChoices = [""] + AgentModelOptions.claudeModelAliases + [customKey]
+    private static let efforts = [""] + AgentModelOptions.claudeEfforts
 
     @State private var claudeModelChoice: String = ""
     @State private var claudeModelCustomText: String = ""
@@ -30,14 +27,16 @@ struct AgentSettingsSection: View {
     @State private var codexModelChoice: String = ""
     @State private var codexModelCustomText: String = ""
     @State private var codexEffort: String = ""
-    @State private var codexModels: [CodexModel] = []
-    @State private var codexModelsLoading: Bool = false
+    private let codexModelStore = CodexModelStore.shared
+    private var codexModels: [CodexModel] { codexModelStore.models }
 
     // MARK: - Bunny tools (spec §5)
 
     @State private var toolsStatus: [AgentHarness: BunnyToolsInstaller.Status] = [:]
     @State private var toolsBusy: Set<AgentHarness> = []
     @State private var toolsError: [AgentHarness: String] = [:]
+    @State private var tokenRegenerated = false
+    private let toolsServer = BunnyToolsServer.shared
 
     var body: some View {
         Form {
@@ -60,8 +59,14 @@ struct AgentSettingsSection: View {
                     .onChange(of: claudePath) { _, new in AgentSettings.claudePath = new }
                 pathRow(.codex, path: $codexPath)
                     .onChange(of: codexPath) { _, new in
+                        // Seeding the field on appear, or Detect (which stores the path itself), isn't a
+                        // change of CLI: just make sure a list is loaded.
+                        guard new != AgentSettings.codexPath else {
+                            codexModelStore.loadIfNeeded()
+                            return
+                        }
                         AgentSettings.codexPath = new
-                        CodexModelCache.reset()
+                        codexModelStore.reset()
                     }
             }
 
@@ -97,14 +102,24 @@ struct AgentSettingsSection: View {
                 }
             }
 
-            Section("Bunny tools") {
+            Section {
                 bunnyToolsHeader
                 bunnyToolsRow(.claudeCode)
                 bunnyToolsRow(.codex)
+                regenerateTokenRow
+            } header: {
+                Text("Bunny tools")
+            } footer: {
+                Text("Installing writes Bunny's access token to ~/.claude.json and ~/.codex/config.toml. " +
+                     "Any program running as you can read it. Uninstall removes it.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .onAppear(perform: load)
+        // A stored model id that matches a just-fetched model is no longer "Custom".
+        .onChange(of: codexModelStore.models) { _, _ in reconcileCodexModelChoice() }
     }
 
     // MARK: - CLI paths
@@ -205,7 +220,7 @@ struct AgentSettingsSection: View {
                 }
                 Text("Custom…").tag(Self.customKey)
             }
-            if codexModelsLoading {
+            if codexModelStore.isLoading && codexModels.isEmpty {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     Text("Loading models…").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -250,27 +265,11 @@ struct AgentSettingsSection: View {
         )
     }
 
-    /// Default + the selected model's supported efforts, or the generic fallback triple when the
-    /// selection is Default/Custom (no fetched `CodexModel` to read efforts from).
+    /// The selected model's supported efforts, or the generic fallback when the selection is
+    /// Default/Custom (no fetched `CodexModel` to read efforts from).
     private func codexEffortOptions() -> [String] {
         let modelID = codexModelChoice == Self.customKey ? codexModelCustomText : codexModelChoice
-        if let match = codexModels.first(where: { $0.id == modelID }) {
-            return match.efforts
-        }
-        return Self.codexFallbackEfforts
-    }
-
-    private func loadCodexModels() {
-        guard codexModels.isEmpty, !codexModelsLoading else { return }
-        codexModelsLoading = true
-        CodexModelCache.fetch { models in
-            codexModelsLoading = false
-            if let models {
-                codexModels = models
-            }
-            // Re-derive: a stored id that matches a just-fetched model is no longer "Custom".
-            reconcileCodexModelChoice()
-        }
+        return AgentModelOptions.efforts(for: .codex, modelID: modelID, codexModels: codexModels)
     }
 
     private func reconcileCodexModelChoice() {
@@ -291,7 +290,7 @@ struct AgentSettingsSection: View {
             HStack {
                 Text("Port")
                 Spacer()
-                Text("\(BunnyToolsServer.shared.port ?? AgentSettings.toolsPort)")
+                Text("\(toolsServer.port ?? AgentSettings.toolsPort)")
                     .foregroundStyle(.secondary)
                     .font(.system(size: 11, design: .monospaced))
             }
@@ -305,13 +304,44 @@ struct AgentSettingsSection: View {
                 Spacer(minLength: 8)
                 Button("Copy MCP URL") { copyToolsURL() }
             }
-            if let boundPort = BunnyToolsServer.shared.port, boundPort != AgentSettings.toolsPort {
+            if isOnFallbackPort, let boundPort = toolsServer.port {
                 Text("Port \(AgentSettings.toolsPort) was busy; Bunny is using \(boundPort). " +
-                     "Reinstall global tools after freeing the port.")
+                     "Global tools use port \(AgentSettings.toolsPort), so they can't reach Bunny and " +
+                     "Install is off until that port is free and Bunny restarts.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.orange)
             }
         }
+    }
+
+    /// The server fell back to another port. Global installs always use the fixed port, so installing now
+    /// would point them at a port nothing listens on: Install is disabled until the fixed port is back.
+    private var isOnFallbackPort: Bool {
+        guard let boundPort = toolsServer.port else { return false }
+        return boundPort != AgentSettings.toolsPort
+    }
+
+    private var regenerateTokenRow: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("Access token")
+                Spacer()
+                Button("Regenerate Token") { regenerateToken() }
+            }
+            if tokenRegenerated {
+                Text("New token in use. Uninstall and install the global tools again so they use it.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    /// Rotates the token and restarts the server with it. Running agents keep working until their next
+    /// request; global installs keep the old token until reinstalled.
+    private func regenerateToken() {
+        AgentSettings.regenerateToolsToken()
+        BunnyToolsServer.shared.restart()
+        tokenRegenerated = true
     }
 
     private func bunnyToolsRow(_ harness: AgentHarness) -> some View {
@@ -357,7 +387,7 @@ struct AgentSettingsSection: View {
         case .unavailable:
             Button("Install") { performToolsInstall(harness) }.disabled(true)
         case .notInstalled, .none:
-            Button("Install") { performToolsInstall(harness) }.disabled(busy)
+            Button("Install") { performToolsInstall(harness) }.disabled(busy || isOnFallbackPort)
         }
     }
 
@@ -430,7 +460,8 @@ struct AgentSettingsSection: View {
 
         reconcileCodexModelChoice()
         codexEffort = AgentSettings.effort(for: .codex)
-        loadCodexModels()
+        // Refresh on every open: the account's model list can change while Bunny runs.
+        codexModelStore.refresh()
     }
 
     /// Fills an empty path field once detection returns (unless the owner typed one meanwhile).
@@ -444,59 +475,5 @@ struct AgentSettingsSection: View {
                 AgentSettings.setCLIPath(path.wrappedValue, for: harness)
             }
         }
-    }
-}
-
-/// In-memory Codex model list cache shared by the Settings model picker and the panel's per-run
-/// Model/Effort menus, so opening either doesn't repeatedly spawn `codex app-server` (spec §2's
-/// "cached in memory"). `fetch` reports nil on any failure — Review Focus #5: Default/Custom must
-/// still work when `codex` is missing or the list call times out.
-@MainActor
-enum CodexModelCache {
-    private(set) static var models: [CodexModel]?
-    private static var isLoading = false
-    private static var waiters: [(@MainActor ([CodexModel]?) -> Void)] = []
-
-    static func fetch(completion: @escaping @MainActor ([CodexModel]?) -> Void) {
-        if let models {
-            completion(models)
-            return
-        }
-        waiters.append(completion)
-        guard !isLoading else { return }
-        isLoading = true
-        let cliPath = AgentSettings.cliPath(for: .codex)
-        guard !cliPath.isEmpty, FileManager.default.isExecutableFile(atPath: cliPath) else {
-            finish(nil)
-            return
-        }
-        // ShellEnvironment.environment() may run a login shell (≤3 s): always off-main.
-        // `CodexModelCatalog.fetch` is itself `nonisolated` and self-dispatches to main to launch the
-        // CLI, so it's safe to call directly from this background queue.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let environment = ShellEnvironment.environment()
-            CodexModelCatalog.fetch(cliPath: cliPath, environment: environment) { fetched in
-                // `fetch`'s completion type is a plain `@Sendable` closure (not actor-isolated), so
-                // hop back to main explicitly before touching `finish` (a MainActor member).
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        finish(fetched)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Clears the cache so the next `fetch` re-queries the CLI (e.g. after the Codex path changes).
-    static func reset() {
-        models = nil
-    }
-
-    private static func finish(_ result: [CodexModel]?) {
-        isLoading = false
-        models = result
-        let pending = waiters
-        waiters = []
-        for waiter in pending { waiter(result) }
     }
 }

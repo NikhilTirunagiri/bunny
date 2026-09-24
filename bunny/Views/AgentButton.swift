@@ -10,9 +10,13 @@ extension Color {
 struct AgentButton: View {
     @Bindable var task: BunnyTask
 
-    private var harness: AgentHarness {
-        task.harness ?? AgentSettings.defaultHarness
-    }
+    /// Bunny tools reach sessions Bunny runs itself; a session reopened in a terminal only sees them via
+    /// the global install.
+    static let sessionToolsNote = "Bunny tools are available in the opened session only if they're " +
+        "installed globally (Settings → Agents → Bunny tools)."
+
+    private var runSettings: RunSettings { AgentSettings.runSettings(for: task) }
+    private var harness: AgentHarness { runSettings.harness }
 
     private var statusDotColor: Color? {
         switch task.runState {
@@ -24,16 +28,12 @@ struct AgentButton: View {
         }
     }
 
-    private func displayValue(_ raw: String) -> String { raw.isEmpty ? "Default" : raw }
-
     /// "Hand off to <harness> · <model> · <effort>" before a session exists, else the open-session hint.
     private var tooltip: String {
         guard task.agentSessionID == nil else {
-            return "Open session in \(AgentSettings.openIn.displayName)"
+            return "Open session in \(AgentSettings.openIn.displayName). \(Self.sessionToolsNote)"
         }
-        let model = displayValue(task.agentModel ?? AgentSettings.model(for: harness))
-        let effort = displayValue(task.agentEffort ?? AgentSettings.effort(for: harness))
-        return "Hand off to \(harness.displayName) · \(model) · \(effort)"
+        return "Hand off to \(RunSettingsResolver.caption(runSettings))"
     }
 
     var body: some View {
@@ -54,7 +54,8 @@ struct AgentButton: View {
         .buttonStyle(.plain)
         .help(tooltip)
         .contextMenu {
-            if !task.runState.isActive {
+            // Only before a session exists; afterwards only the session items below.
+            if AgentConfigMenu.isAvailable(for: task) {
                 AgentConfigMenu(task: task)
             }
 

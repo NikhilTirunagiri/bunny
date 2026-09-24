@@ -93,10 +93,24 @@ enum AgentSettings {
                      forKey: harness == .claudeCode ? Key.claudeEffort : Key.codexEffort)
     }
 
+    /// What `task`'s next run uses (`RunSettingsResolver`): the harness from `requestedHarness`, else the
+    /// task's chosen one, else the default; the task's model/effort only when chosen for that harness.
+    static func runSettings(for task: BunnyTask, requestedHarness: AgentHarness? = nil) -> RunSettings {
+        RunSettingsResolver.resolve(
+            requestedHarness: requestedHarness,
+            taskHarness: task.agentHarness,
+            taskModel: task.agentModel,
+            taskEffort: task.agentEffort,
+            defaultHarness: defaultHarness,
+            settingsModel: { model(for: $0) },
+            settingsEffort: { effort(for: $0) }
+        )
+    }
+
     // MARK: - Bunny tools (spec §5)
 
-    /// The port Bunny's MCP server tries first (default 47823). The server may end up on another
-    /// port when this one is taken; `toolsURL` always has the actual one.
+    /// The port Bunny's MCP server tries first (default 47823). Not editable in the UI (spec §5 deviation).
+    /// The server may end up on another port when this one is taken; `toolsURL` always has the actual one.
     static var toolsPort: Int {
         get {
             let stored = defaults.integer(forKey: Key.toolsPort)
@@ -116,8 +130,20 @@ enum AgentSettings {
         return token
     }
 
+    /// Replaces the token with a new random one. The server must restart to use it, and global installs
+    /// keep the old token until they are reinstalled.
+    static func regenerateToolsToken() {
+        defaults.set(randomHexToken(byteCount: 32), forKey: Key.toolsToken)
+    }
+
+    /// The URL of the running server (its actual port), for runs Bunny launches.
     static var toolsURL: String {
         "http://127.0.0.1:\(BunnyToolsServer.shared.port ?? toolsPort)/mcp"
+    }
+
+    /// The URL written by the global install: always the fixed `toolsPort`, never a fallback port.
+    static var globalToolsURL: String {
+        "http://127.0.0.1:\(toolsPort)/mcp"
     }
 
     static func commandName(for harness: AgentHarness) -> String {
@@ -143,8 +169,8 @@ enum AgentSettings {
     }
 
     /// At launch: warms the login-shell PATH on a background queue and stores the location of each CLI
-    /// whose path isn't set yet. Never overwrites a path the owner set.
-    static func warmUp() {
+    /// whose path isn't set yet. Never overwrites a path the owner set. `completion` runs on main after.
+    static func warmUp(completion: (@MainActor @Sendable () -> Void)? = nil) {
         let missing = AgentHarness.allCases.filter { cliPath(for: $0).isEmpty }
         let names = missing.map { ($0, commandName(for: $0)) }
         DispatchQueue.global(qos: .utility).async {
@@ -155,6 +181,7 @@ enum AgentSettings {
                     for (harness, path) in found where cliPath(for: harness).isEmpty {
                         setCLIPath(path, for: harness)
                     }
+                    completion?()
                 }
             }
         }
