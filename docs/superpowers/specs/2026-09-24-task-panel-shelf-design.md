@@ -87,8 +87,8 @@ stale-refresh decision) live in `BunnyCore` (§9) and are unit tested.
 
 ### 4.1 Showing / hiding (hover model)
 
-State lives in `AppState`: `panelTaskID: UUID?`, `panelLocked: Bool`.
-A pure `HoverIntent` state machine (in `BunnyCore`, clock-injected) decides:
+State lives in a main-actor `PanelCoordinator` (observable; exposes
+`shownTaskID`, `lockedTaskID`). A pure `HoverIntent` state machine (in `BunnyCore`, clock-injected) decides:
 
 | event | effect |
 |---|---|
@@ -108,8 +108,8 @@ Locking is also what Spec B uses for "click the yellow task to answer".
 `.transient` popovers close on clicks in other windows, including our own child
 panel. Change `popover.behavior` to `.applicationDefined` and close explicitly:
 - global monitor for `.leftMouseDown/.rightMouseDown` (clicks in other apps) → close;
-- local monitor: clicks inside the popover or panel windows (or their sheets/
-  child popovers such as the timer picker) are ignored; others close;
+- clicks inside any Bunny window (popover, panel, timer-picker popover) never
+  close it — Bunny has no other windows, so a local monitor is only used for Esc;
 - status item click toggles as today; Esc in the popover closes it (Esc in the
   panel first clears a lock, second Esc closes).
 - Closing the popover orders the panel out.
@@ -132,18 +132,18 @@ panel. Change `popover.behavior` to `.applicationDefined` and close explicitly:
   apps, another Bunny task's shelf.
 - Drop targets: the panel's shelf section, and every `TaskRowView` (drop onto a
   row adds to that task's shelf and flashes the row's shelf badge).
-- Task reordering currently uses a `String` payload; it moves to a private
-  pasteboard type (`com.nikhiltirunagiri.bunny.task-id`) so a Finder drag
-  (which also carries text) can never be mistaken for a reorder.
+- Task reordering keeps its `String` (UUID) payload; its handler already
+  rejects non-UUID strings, and the row-level `URL` drop is the inner target so
+  it takes precedence for Finder drags. (A private exported UTType would need a
+  hand-maintained Info.plist, which the project deliberately doesn't have.)
 
 ### 5.3 Spring-loading on the status item
-- Register the status item button's window for `.fileURL` and set a dragging
-  handler on it (window delegate implementing `NSDraggingDestination`). On
-  `draggingEntered`, open the popover (no drop is accepted on the icon itself;
-  the user continues the drag into the popover). If the window-delegate route
-  fails on the target OS, fall back to a transparent `NSView` overlay on the
-  button that returns `nil` from `hitTest` for mouse events but is registered
-  for dragged types.
+- A transparent `StatusItemDropView` is added as a subview filling the status
+  item button, registered for `.fileURL`. On `draggingEntered` it opens the
+  popover (no drop is accepted on the icon itself; the user continues the drag
+  into the popover). Because it sits on top of the button, it forwards
+  `mouseDown`/`rightMouseDown` to the button's action (toggle popover). We do
+  not touch the system-owned status bar window's delegate.
 
 ### 5.4 Drag out
 Shelf rows use an AppKit drag source (`NSViewRepresentable` wrapping an
