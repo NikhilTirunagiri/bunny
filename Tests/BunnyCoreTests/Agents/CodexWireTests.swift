@@ -145,6 +145,7 @@ struct CodexWireTests {
             "Authorization": "Bearer secret-token",
             "X-Bunny-Task": "11111111-2222-3333-4444-555555555555",
         ],
+        "bearer_token_env_var": "BUNNY_TOOLS_TOKEN",
         "default_tools_approval_mode": "approve",
     ]
 

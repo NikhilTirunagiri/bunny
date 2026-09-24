@@ -120,6 +120,7 @@ struct CodexRunnerTests {
         #expect(thread["sandbox"] as? String == "workspace-write")
         #expect(turn["effort"] == nil)
         #expect(echo["instructionsMentionBunnyTools"] as? Bool == false)
+        #expect(echo["toolsTokenEnv"] is NSNull)
     }
 
     @Test func codexSendsModelEffortAndBunnyTools() async throws {
@@ -140,6 +141,7 @@ struct CodexRunnerTests {
                         "Authorization": "Bearer secret-token",
                         "X-Bunny-Task": "11111111-2222-3333-4444-555555555555",
                     ],
+                    "bearer_token_env_var": "BUNNY_TOOLS_TOKEN",
                     "default_tools_approval_mode": "approve",
                 ],
             ],
@@ -152,6 +154,8 @@ struct CodexRunnerTests {
         #expect(config == expectedConfig)
         #expect(turn["effort"] as? String == "high")
         #expect(echo["instructionsMentionBunnyTools"] as? Bool == true)
+        // The token reaches Codex through the variable `bearer_token_env_var` names.
+        #expect(echo["toolsTokenEnv"] as? String == "secret-token")
     }
 
     @Test func codexResumeSendsModelToolsAndEffort() async throws {

@@ -4,6 +4,8 @@ import Foundation
 struct BunnyToolsEndpoint: Equatable, Sendable {
     /// MCP server name as the agents see it; Claude tool names become `mcp__bunny__<tool>`.
     static let serverName = "bunny"
+    /// Environment variable that carries the token to Codex runs (`bearer_token_env_var`), see `CodexWire`.
+    static let codexTokenEnvironmentVariable = "BUNNY_TOOLS_TOKEN"
 
     var url: String
     var token: String

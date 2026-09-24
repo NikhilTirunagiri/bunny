@@ -27,11 +27,6 @@ enum BunnyToolsInstaller {
     }
 
     private static let serverName = "bunny"
-    /// Lets an unattended `never`-policy Codex session call Bunny tools with no per-call approval
-    /// prompt (mcp-http.md, "Codex approval — resolved"). `codex mcp add` has no flag for this, so
-    /// the installer patches `config.toml` directly, right after adding the server.
-    nonisolated private static let codexApprovalKey = "default_tools_approval_mode"
-    nonisolated private static let codexApprovalValue = "approve"
 
     // MARK: - Status
 
@@ -56,7 +51,8 @@ enum BunnyToolsInstaller {
             completion(.failure(InstallerError.cliMissing(AgentSettings.commandName(for: harness))))
             return
         }
-        let url = AgentSettings.toolsURL
+        // Always the fixed port: a fallback port changes on every launch (Settings disables Install then).
+        let url = AgentSettings.globalToolsURL
         let token = AgentSettings.toolsToken
 
         switch harness {
@@ -69,8 +65,10 @@ enum BunnyToolsInstaller {
                 completion(commandResult(exitCode: exitCode, stdout: stdout, stderr: stderr))
             }
         case .codex:
-            let arguments = ["mcp", "add", serverName, "--url", url, "--bearer-token-env-var", "BUNNY_TOKEN"]
-            installCodex(cliPath: cliPath, arguments: arguments, completion: completion)
+            // `codex mcp add` has no header flag, so the new entry is then rewritten to carry the token and
+            // the approval mode (`CodexConfigPatcher`). Re-adding replaces any earlier entry wholesale.
+            let arguments = ["mcp", "add", serverName, "--url", url]
+            installCodex(cliPath: cliPath, arguments: arguments, token: token, completion: completion)
         }
     }
 
@@ -109,20 +107,22 @@ enum BunnyToolsInstaller {
         return .success(())
     }
 
-    /// `codex mcp add`, then (only on success) patches `config.toml` with the approval-mode key.
-    /// Both steps run off-main; `completion` runs on main.
+    /// `codex mcp add`, then (only on success) rewrites the new `[mcp_servers.bunny]` entry in
+    /// `config.toml` (see `CodexConfigPatcher`). Both steps run off-main; `completion` runs on main.
     nonisolated private static func installCodex(
         cliPath: String,
         arguments: [String],
+        token: String,
         completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void
     ) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let (exitCode, stdout, stderr) = runProcess(cliPath: cliPath, arguments: arguments)
+            let environment = ShellEnvironment.environment()
+            let (exitCode, stdout, stderr) = runProcess(cliPath: cliPath, arguments: arguments, environment: environment)
             let finalResult: Result<Void, Error>
             switch commandResult(exitCode: exitCode, stdout: stdout, stderr: stderr) {
             case .success:
                 do {
-                    try setCodexApprovalMode()
+                    try patchCodexConfig(at: codexConfigURL(environment: environment), token: token)
                     finalResult = .success(())
                 } catch {
                     finalResult = .failure(error)
@@ -144,7 +144,8 @@ enum BunnyToolsInstaller {
         completion: @escaping @MainActor @Sendable (Int32, String, String) -> Void
     ) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let (exitCode, stdout, stderr) = runProcess(cliPath: cliPath, arguments: arguments)
+            let (exitCode, stdout, stderr) = runProcess(cliPath: cliPath, arguments: arguments,
+                                                        environment: ShellEnvironment.environment())
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { completion(exitCode, stdout, stderr) }
             }
@@ -153,11 +154,12 @@ enum BunnyToolsInstaller {
 
     /// Synchronous (blocks the calling thread until the child exits) — only ever called from a
     /// background queue by `run`/`installCodex`.
-    nonisolated private static func runProcess(cliPath: String, arguments: [String]) -> (Int32, String, String) {
+    nonisolated private static func runProcess(cliPath: String, arguments: [String],
+                                               environment: [String: String]) -> (Int32, String, String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: cliPath)
         process.arguments = arguments
-        process.environment = ShellEnvironment.environment()
+        process.environment = environment
         process.standardInput = FileHandle.nullDevice
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -179,36 +181,20 @@ enum BunnyToolsInstaller {
         )
     }
 
-    /// Adds `default_tools_approval_mode = "approve"` under `[mcp_servers.bunny]` in Codex's
-    /// `config.toml`, without disturbing anything else in the file. No-op if already set.
-    nonisolated private static func setCodexApprovalMode() throws {
-        let configURL = codexConfigURL()
+    /// Rewrites `[mcp_servers.bunny]` in the Codex config at `configURL` (injectable for testing).
+    nonisolated static func patchCodexConfig(at configURL: URL, token: String) throws {
         guard let text = try? String(contentsOf: configURL, encoding: .utf8) else {
             throw InstallerError.commandFailed("Codex config not found at \(configURL.path)")
         }
-        var lines = text.components(separatedBy: "\n")
-        guard let sectionIndex = lines.firstIndex(where: {
-            $0.trimmingCharacters(in: .whitespaces) == "[mcp_servers.bunny]"
-        }) else {
-            throw InstallerError.commandFailed("[mcp_servers.bunny] not found in Codex config")
+        guard let patched = CodexConfigPatcher.patch(text, token: token) else {
+            throw InstallerError.commandFailed("[\(CodexConfigPatcher.serverTable)] not found in Codex config")
         }
-        var endIndex = lines.count
-        for index in (sectionIndex + 1)..<lines.count {
-            if lines[index].trimmingCharacters(in: .whitespaces).hasPrefix("[") {
-                endIndex = index
-                break
-            }
-        }
-        let alreadySet = lines[(sectionIndex + 1)..<endIndex].contains {
-            $0.trimmingCharacters(in: .whitespaces).hasPrefix(codexApprovalKey)
-        }
-        guard !alreadySet else { return }
-        lines.insert("\(codexApprovalKey) = \"\(codexApprovalValue)\"", at: sectionIndex + 1)
-        try lines.joined(separator: "\n").write(to: configURL, atomically: true, encoding: .utf8)
+        try patched.write(to: configURL, atomically: true, encoding: .utf8)
     }
 
-    nonisolated private static func codexConfigURL() -> URL {
-        if let home = ProcessInfo.processInfo.environment["CODEX_HOME"], !home.isEmpty {
+    /// `$CODEX_HOME/config.toml` from the environment the CLI ran with, else `~/.codex/config.toml`.
+    nonisolated private static func codexConfigURL(environment: [String: String]) -> URL {
+        if let home = environment["CODEX_HOME"], !home.isEmpty {
             return URL(fileURLWithPath: (home as NSString).expandingTildeInPath).appendingPathComponent("config.toml")
         }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/config.toml")

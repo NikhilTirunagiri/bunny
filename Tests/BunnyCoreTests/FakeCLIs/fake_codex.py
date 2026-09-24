@@ -12,7 +12,8 @@ Keywords in the turn text pick the scenario:
   POLICY   -> agentMessage "policy: <approvalPolicy> sandbox: <sandbox> roots: <writable roots json>"
   CONFIG   -> agentMessage "config: <json {"thread": thread/start or thread/resume params minus
               developerInstructions, "turn": this turn/start's params minus input,
-              "instructionsMentionBunnyTools": developerInstructions mention the `bunny` tools}>"
+              "instructionsMentionBunnyTools": developerInstructions mention the `bunny` tools,
+              "toolsTokenEnv": $BUNNY_TOOLS_TOKEN or null}>"
   ELICIT   -> server request mcpServer/elicitation/request (id 98, serverName "bunny"; ELICIT_OTHER
               uses serverName "other"); the turn finishes with "elicitation: <action>" once the client
               replies, or "elicitation error: <code>" for an error reply
@@ -106,7 +107,8 @@ def handle_turn(turn_id, text, turn_params):
         turn = {k: v for k, v in turn_params.items() if k != "input"}
         agent_message(turn_id, "config: " + json.dumps({
             "thread": thread, "turn": turn,
-            "instructionsMentionBunnyTools": "`bunny` tools" in instructions}, sort_keys=True))
+            "instructionsMentionBunnyTools": "`bunny` tools" in instructions,
+            "toolsTokenEnv": os.environ.get("BUNNY_TOOLS_TOKEN")}, sort_keys=True))
         complete(turn_id)
     elif "POLICY" in text:
         roots = thread_params.get("config", {}).get("sandbox_workspace_write", {}).get("writable_roots", [])

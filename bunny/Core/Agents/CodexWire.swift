@@ -167,11 +167,19 @@ enum CodexWire {
     /// `config.mcp_servers` for Bunny's HTTP MCP server. `default_tools_approval_mode = "approve"` lets its
     /// tools run without an approval prompt under `approvalPolicy: "never"` + `workspace-write`
     /// (see "Codex approval — resolved" in docs/superpowers/research/mcp-http.md).
+    ///
+    /// Codex merges this into a global `[mcp_servers.bunny]` key by key (verified; dotted
+    /// `mcp_servers.bunny.*` keys behave the same). A leftover global `bearer_token_env_var` would
+    /// then survive and fail startup when that variable is unset, and a null can't remove it. So the
+    /// run always sets its own `bearer_token_env_var`, which Codex prefers over `http_headers`'
+    /// Authorization; `CodexRunner` puts the token in that variable. The Authorization header stays for
+    /// completeness.
     static func mcpServersConfig(for tools: BunnyToolsEndpoint) -> [String: Any] {
         [
             BunnyToolsEndpoint.serverName: [
                 "url": tools.url,
                 "http_headers": tools.headers,
+                "bearer_token_env_var": BunnyToolsEndpoint.codexTokenEnvironmentVariable,
                 "default_tools_approval_mode": "approve",
             ] as [String: Any],
         ]

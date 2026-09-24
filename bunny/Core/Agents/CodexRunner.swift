@@ -38,7 +38,7 @@ final class CodexRunner: AgentRunner {
             executable: options.cliPath,
             arguments: ["app-server", "--stdio"],
             cwd: brief.workingDirectory,
-            environment: options.environment
+            environment: Self.environment(for: options)
         )
         process.onLine = { [weak self] line in self?.handle(line) }
         process.onExit = { [weak self] code, stderrTail in self?.handleExit(code: code, stderrTail: stderrTail) }
@@ -89,6 +89,15 @@ final class CodexRunner: AgentRunner {
     }
 
     // MARK: - Private
+
+    /// The run's environment, plus the Bunny tools token in the variable the MCP config names.
+    static func environment(for options: AgentRunOptions) -> [String: String] {
+        var environment = options.environment
+        if let tools = options.tools {
+            environment[BunnyToolsEndpoint.codexTokenEnvironmentVariable] = tools.token
+        }
+        return environment
+    }
 
     private func startNextQueuedTurn() {
         guard threadReady, !turnInFlight, let threadID = sessionID, let process, !queuedMessages.isEmpty else { return }

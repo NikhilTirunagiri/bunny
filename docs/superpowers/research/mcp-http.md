@@ -173,6 +173,8 @@ Codex:
 codex mcp add bunny --url http://127.0.0.1:PORT/mcp --bearer-token-env-var BUNNY_TOKEN
 codex mcp remove bunny
 ```
+(Bunny's installer no longer uses `--bearer-token-env-var`; see "Codex config merge and the global
+install" below.)
 Confirmed via `codex mcp list`/`get`, and `config.toml` diffed back to identical
 (modulo unrelated key-order churn from TOML rewriting) after removal.
 
@@ -269,4 +271,60 @@ to tool annotations. `"approve"` does.
 **Global install (`codex mcp add bunny`)**: `config.toml` should also get
 `default_tools_approval_mode = "approve"` under `[mcp_servers.bunny]`. Otherwise sessions outside
 Bunny that run with `never` + `workspace-write` hit the same failure. (Inferred from the table above;
-not separately tested through `config.toml`.)
+not separately tested through `config.toml`.) Superseded by the next section: the installer now writes
+the token and the approval mode itself.
+
+## Codex config merge and the global install (verified 2026-09-24, codex-cli 0.155.0)
+
+Everything ran against a throwaway `CODEX_HOME` (`.../scratchpad/codex-merge/home*`); the real
+`~/.codex/config.toml` was never touched. `run_all.sh` re-runs every case below and its output is in
+`.../scratchpad/codex-merge/results.log`. Driver: `.../scratchpad/codex-merge/drive.py` starts
+`codex app-server --stdio`, sends `thread/start` (`never` + `workspace-write`) with a given `config`, and
+prints every `mcpServer/startupStatus/updated`. No model turn is needed (no auth), since MCP servers start
+with the thread. `hdrserver.py` is a minimal MCP server that logs each request's `Authorization` header.
+
+The global config always had a second server `other` and a `bunny` entry pointing at a stale port.
+
+| # | global `[mcp_servers.bunny]` | per-run `thread/start.config` | result |
+|---|---|---|---|
+| A | `bearer_token_env_var = "BUNNY_TOKEN"` (what `codex mcp add … --bearer-token-env-var` writes) | nested `{"mcp_servers":{"bunny":{url, http_headers, default_tools_approval_mode}}}` | **bunny fails**: *"Environment variable BUNNY_TOKEN for MCP server 'bunny' is not set"*. `other` starts. |
+| B | same as A | same plus `"bearer_token_env_var": null` | **fails**: the null becomes `""` (*"Environment variable  for MCP server 'bunny' is not set"*). |
+| C | same as A | dotted keys `{"mcp_servers.bunny.url": …, "mcp_servers.bunny.http_headers": …}` | **fails** exactly like A. |
+| D | `http_headers = { Authorization = "Bearer stale" }` + stale url | nested, `http_headers` with `Authorization: Bearer run`, `X-Test` | **works**: bunny gets the run's url, `Bearer run` and `X-Test`. `other` starts. |
+| F | same as A | nested plus `"bearer_token_env_var": "BUNNY_TOOLS_RUN_TOKEN"`, that variable set in the app-server environment | **works**: header is `Bearer <env value>`. The env var wins over `http_headers`' Authorization; `X-Test` still arrives. |
+| G | patched entry (below), no per-run config | — | **works**: `Bearer <token from config.toml>`. |
+| H | patched entry | nested with `bearer_token_env_var` + env set | **works**: the run's token, url and headers. |
+
+Findings:
+
+- The per-run `config` is **merged key by key** into the global config. It does not replace the
+  `mcp_servers` table (other servers keep starting in every case) nor the `bunny` entry (global keys the run
+  doesn't set survive). Dotted override keys behave identically, so switching `CodexWire` to them would not
+  help.
+- A global `bearer_token_env_var` therefore breaks Bunny's own runs, and a run can't delete it (null →
+  `""`). It can only override it with another variable name.
+- `codex mcp add` rewrites the whole file: inline tables become sub-tables
+  (`[mcp_servers.other.http_headers]`), and re-adding `bunny` replaces its entry wholesale (headers and
+  approval mode are dropped). `codex mcp remove bunny` removes the entry including a headers sub-table.
+
+What Bunny does now:
+
+- **Global install** runs `codex mcp add bunny --url http://127.0.0.1:<fixed port>/mcp` (no env var), then
+  `CodexConfigPatcher` rewrites the entry to
+  ```toml
+  [mcp_servers.bunny]
+  url = "http://127.0.0.1:47823/mcp"
+  http_headers = { Authorization = "Bearer <token>" }
+  default_tools_approval_mode = "approve"
+  ```
+  removing any `bearer_token_env_var` and any `[mcp_servers.bunny.http_headers]` sub-table. `codex mcp get
+  bunny` then shows `bearer_token_env_var: -`, `http_headers: Authorization=*****`,
+  `default_tools_approval_mode: approve` (the "install" step in `results.log`). The rewrite after a later
+  `codex mcp add` of another server (sub-table form) was checked by hand the same way and is covered by
+  `CodexConfigPatcherTests`.
+- **Per-run config** (`CodexWire.mcpServersConfig`) keeps the nested object and adds
+  `"bearer_token_env_var": "BUNNY_TOOLS_TOKEN"`; `CodexRunner` sets `BUNNY_TOOLS_TOKEN=<token>` in the
+  app-server's environment (runs F and H). A stale global entry, such as one written by the earlier installer
+  or by hand, can then no longer break Bunny's runs. Codex's default `shell_environment_policy` leaves
+  variables whose names contain `TOKEN` out of the environment of the commands the agent runs. That comes
+  from Codex's documentation and was not tested here.
