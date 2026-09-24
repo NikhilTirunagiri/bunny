@@ -78,11 +78,17 @@ final class MCPServerCore {
             return HTTPResponseLite(status: 401, headers: [:], body: Data())
         }
 
-        guard
-            let object = try? JSONSerialization.jsonObject(with: request.body),
-            let message = object as? [String: Any]
-        else {
-            return jsonResponse(status: 200, body: errorEnvelope(id: nil, code: -32700, message: "Parse error"))
+        guard let object = try? JSONSerialization.jsonObject(with: request.body, options: [.fragmentsAllowed]) else {
+            return jsonResponse(status: 400, body: errorEnvelope(id: nil, code: -32700, message: "Parse error"))
+        }
+        if object is [Any] {
+            return jsonResponse(
+                status: 400,
+                body: errorEnvelope(id: nil, code: -32600, message: "batch requests are not supported")
+            )
+        }
+        guard let message = object as? [String: Any] else {
+            return jsonResponse(status: 400, body: errorEnvelope(id: nil, code: -32700, message: "Parse error"))
         }
 
         let id = message["id"]

@@ -128,8 +128,11 @@ enum BunnyToolArguments {
     // MARK: - Field validators
 
     private static func validatedTitle(_ raw: Any?) -> Result<String, BunnyToolError> {
-        guard let raw, !isNull(raw), let string = raw as? String else {
+        guard let raw, !isNull(raw) else {
             return .failure(BunnyToolError(message: "title is required"))
+        }
+        guard let string = raw as? String else {
+            return .failure(BunnyToolError(message: "title must be a string"))
         }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
