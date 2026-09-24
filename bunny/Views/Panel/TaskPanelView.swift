@@ -1,0 +1,166 @@
+import SwiftUI
+import SwiftData
+
+struct TaskPanelView: View {
+    let taskID: UUID
+    @Environment(PanelCoordinator.self) private var coordinator
+    @Query private var matches: [BunnyTask]
+    @State private var titleDraft = ""
+    @FocusState private var focus: Field?
+    /// An agent-question text field has focus (reported by `AgentPanelSection`).
+    @State private var answerFieldFocused = false
+    private enum Field { case title, description }
+
+    init(taskID: UUID) {
+        self.taskID = taskID
+        _matches = Query(filter: #Predicate<BunnyTask> { $0.id == taskID })
+    }
+
+    var body: some View {
+        Group {
+            // Archived tasks count as missing: the panel shows nothing for them.
+            if let task = matches.first, task.archivedAt == nil {
+                content(task)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onHover { $0 ? coordinator.panelEntered() : coordinator.panelExited() }
+        // One combined signal so moving focus between the description and an answer field never
+        // briefly releases the editing hold (which would let the panel switch mid-typing).
+        .onChange(of: focus != nil || answerFieldFocused) { _, editing in coordinator.setEditing(editing) }
+    }
+
+    @ViewBuilder
+    private func content(_ task: BunnyTask) -> some View {
+        @Bindable var task = task
+        VStack(alignment: .leading, spacing: 12) {
+            if let pid = task.parentID {
+                ParentBreadcrumb(parentID: pid)
+            }
+            TextField("Title", text: $titleDraft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 17, weight: .semibold))
+                .lineLimit(1...3)
+                .focused($focus, equals: .title)
+                .onSubmit { commitTitle(task) }
+                .onAppear { titleDraft = task.title }
+                .onChange(of: focus) { old, _ in if old == .title { commitTitle(task) } }
+                .onChange(of: task.title) { _, new in if focus != .title { titleDraft = new } }
+            // Everything below the title scrolls so a tall question form never clips its buttons.
+            GeometryReader { proxy in
+                ScrollView {
+                    scrollContent(task, needsInput: task.runState == .needsInput && !task.isSubtask)
+                        .frame(minHeight: proxy.size.height, alignment: .top)
+                }
+                .scrollIndicators(.automatic)
+            }
+        }
+        .padding(16)
+        .onDisappear {
+            // Switching task (new `.id`) or archiving tears this view down without a focus change:
+            // keep an in-progress title and release the coordinator's editing hold.
+            // Skip deleted models: reading a deleted model's attributes can trap.
+            if task.modelContext != nil, !task.isDeleted, titleDraft != task.title { commitTitle(task) }
+            coordinator.setEditing(false)
+        }
+    }
+
+    /// While the agent needs input the question comes first: the agent section moves up, the
+    /// description collapses and the empty-shelf drop zone is hidden (existing shelf items stay).
+    @ViewBuilder
+    private func scrollContent(_ task: BunnyTask, needsInput: Bool) -> some View {
+        @Bindable var task = task
+        VStack(alignment: .leading, spacing: 12) {
+            PanelMetaLine(task: task)
+            if needsInput {
+                agentSection(task)
+            }
+            ZStack(alignment: .topLeading) {
+                if task.taskDescription.isEmpty {
+                    Text("Add a description…").font(.system(size: 13)).foregroundStyle(.tertiary)
+                        .padding(.top, 1).allowsHitTesting(false)
+                }
+                TextEditor(text: $task.taskDescription)
+                    .font(.system(size: 13))
+                    .scrollContentBackground(.hidden)
+                    .focused($focus, equals: .description)
+            }
+            .frame(height: needsInput ? 36 : 120)
+            ShelfView(taskID: task.id, showsEmptyDropZone: !needsInput)
+            if !needsInput {
+                Spacer(minLength: 0)
+                agentSection(task)
+            }
+        }
+    }
+
+    /// Agents belong to parent tasks only (spec): subtasks get no agent section.
+    @ViewBuilder
+    private func agentSection(_ task: BunnyTask) -> some View {
+        if !task.isSubtask {
+            AgentPanelSection(task: task, onAnswerFieldFocusChange: { answerFieldFocused = $0 })
+        }
+    }
+
+    private func commitTitle(_ task: BunnyTask) {
+        let trimmed = titleDraft.components(separatedBy: .newlines).joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            titleDraft = task.title
+        } else {
+            if task.title != trimmed { task.title = trimmed }
+            titleDraft = trimmed
+        }
+    }
+}
+
+/// "In <parent>" breadcrumb for subtasks; queries only the parent row.
+private struct ParentBreadcrumb: View {
+    @Query private var parents: [BunnyTask]
+
+    init(parentID: UUID) {
+        _parents = Query(filter: #Predicate<BunnyTask> { $0.id == parentID })
+    }
+
+    var body: some View {
+        if let parent = parents.first {
+            Label(parent.title, systemImage: "arrow.turn.left.up")
+                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+}
+
+/// Timer state and subtask progress. Its own view so the 1 s timer tick only re-renders this line.
+private struct PanelMetaLine: View {
+    let task: BunnyTask
+    @Environment(TimerManager.self) private var timerManager
+    @Query private var children: [BunnyTask]
+
+    init(task: BunnyTask) {
+        self.task = task
+        let taskID = task.id
+        _children = Query(filter: #Predicate<BunnyTask> { $0.parentID == taskID && $0.archivedAt == nil },
+                          sort: [SortDescriptor(\BunnyTask.sortOrder), SortDescriptor(\BunnyTask.createdAt)])
+    }
+
+    var body: some View {
+        let _ = timerManager.tick
+        HStack(spacing: 10) {
+            if task.isTimerRunning {
+                Label("\(task.formattedRemaining) left", systemImage: "timer")
+            } else if task.isTimerExpired {
+                Label("Time's up", systemImage: "clock.badge.checkmark")
+            } else if let d = task.timerDuration {
+                Label("\(Int(d / 60)) min timer", systemImage: "clock")
+            }
+            if !task.isSubtask && !children.isEmpty {
+                let done = children.filter(\.isCompleted).count
+                Label("\(done)/\(children.count) subtasks", systemImage: "checklist")
+            }
+        }
+        .font(.system(size: 11)).foregroundStyle(.secondary)
+        .labelStyle(.titleAndIcon)
+    }
+}
