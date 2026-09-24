@@ -9,6 +9,8 @@ enum CodexWire {
         case commandStarted(String)
         case turnCompleted(turnID: String?, status: String, error: String?)
         case approvalRequest(rpcID: String, method: String, title: String, detail: String)
+        /// `mcpServer/elicitation/request`: an MCP server (or Codex's own MCP tool-call approval) asks the user.
+        case mcpElicitation(rpcID: String, serverName: String)
         case unsupportedRequest(rpcID: String)
         case ignored
     }
@@ -75,6 +77,10 @@ enum CodexWire {
                     detail: params["reason"] as? String ?? params["grantRoot"] as? String ?? ""
                 )
 
+            case "mcpServer/elicitation/request":
+                guard let rpcID = rpcIDString(object["id"]) else { return .ignored }
+                return .mcpElicitation(rpcID: rpcID, serverName: params["serverName"] as? String ?? "")
+
             default:
                 return requestFallback(object)
             }
@@ -118,7 +124,9 @@ enum CodexWire {
         approvalPolicy: String,
         sandbox: String,
         developerInstructions: String,
-        writableRoots: [String]
+        writableRoots: [String],
+        model: String? = nil,
+        tools: BunnyToolsEndpoint? = nil
     ) -> Data {
         var params: [String: Any] = [
             "cwd": cwd,
@@ -126,29 +134,58 @@ enum CodexWire {
             "sandbox": sandbox,
             "developerInstructions": developerInstructions,
         ]
+        if let model = AgentRunnerText.nonEmpty(model) {
+            params["model"] = model
+        }
+        var config: [String: Any] = [:]
         if !writableRoots.isEmpty {
-            params["config"] = [
-                "sandbox_workspace_write": [
-                    "writable_roots": writableRoots,
-                ],
+            config["sandbox_workspace_write"] = [
+                "writable_roots": writableRoots,
             ]
+        }
+        if let tools {
+            config["mcp_servers"] = mcpServersConfig(for: tools)
+        }
+        if !config.isEmpty {
+            params["config"] = config
         }
         return request(id: id, method: "thread/start", params: params)
     }
 
-    static func threadResume(id: Int, threadID: String) -> Data {
-        request(id: id, method: "thread/resume", params: ["threadId": threadID])
+    /// Model and Bunny tools are re-sent on resume: a new app-server process starts from the user's config.
+    static func threadResume(id: Int, threadID: String, model: String? = nil, tools: BunnyToolsEndpoint? = nil) -> Data {
+        var params: [String: Any] = ["threadId": threadID]
+        if let model = AgentRunnerText.nonEmpty(model) {
+            params["model"] = model
+        }
+        if let tools {
+            params["config"] = ["mcp_servers": mcpServersConfig(for: tools)]
+        }
+        return request(id: id, method: "thread/resume", params: params)
     }
 
-    static func turnStart(id: Int, threadID: String, text: String) -> Data {
-        request(
-            id: id,
-            method: "turn/start",
-            params: [
-                "threadId": threadID,
-                "input": [["type": "text", "text": text]],
-            ]
-        )
+    /// `config.mcp_servers` for Bunny's HTTP MCP server. `default_tools_approval_mode = "approve"` lets its
+    /// tools run without an approval prompt under `approvalPolicy: "never"` + `workspace-write`
+    /// (see "Codex approval — resolved" in docs/superpowers/research/mcp-http.md).
+    static func mcpServersConfig(for tools: BunnyToolsEndpoint) -> [String: Any] {
+        [
+            BunnyToolsEndpoint.serverName: [
+                "url": tools.url,
+                "http_headers": tools.headers,
+                "default_tools_approval_mode": "approve",
+            ] as [String: Any],
+        ]
+    }
+
+    static func turnStart(id: Int, threadID: String, text: String, effort: String? = nil) -> Data {
+        var params: [String: Any] = [
+            "threadId": threadID,
+            "input": [["type": "text", "text": text]],
+        ]
+        if let effort = AgentRunnerText.nonEmpty(effort) {
+            params["effort"] = effort
+        }
+        return request(id: id, method: "turn/start", params: params)
     }
 
     static func turnInterrupt(id: Int, threadID: String, turnID: String) -> Data {
@@ -165,6 +202,46 @@ enum CodexWire {
             "id": rpcIDValue(rpcID),
             "result": ["decision": approved ? "accept" : "decline"],
         ])
+    }
+
+    /// Reply to `mcpServer/elicitation/request` (McpServerElicitationRequestResponse).
+    static func elicitationReply(rpcID: String, accept: Bool) -> Data {
+        encode([
+            "jsonrpc": "2.0",
+            "id": rpcIDValue(rpcID),
+            "result": [
+                "action": accept ? "accept" : "decline",
+                "content": NSNull(),
+                "_meta": NSNull(),
+            ] as [String: Any],
+        ])
+    }
+
+    /// `model/list` for the Settings picker (hidden models excluded).
+    static func modelList(id: Int) -> Data {
+        request(id: id, method: "model/list", params: ["includeHidden": false])
+    }
+
+    /// Models from a `model/list` response line, or nil if `line` is not a successful model list.
+    /// Hidden models are skipped; entries without an id are dropped.
+    static func parseModelList(_ line: Data) -> [CodexModel]? {
+        guard let object = jsonObject(line),
+              let result = object["result"] as? [String: Any],
+              let data = result["data"] as? [[String: Any]] else { return nil }
+        return data.compactMap { entry in
+            guard entry["hidden"] as? Bool != true,
+                  let id = (entry["model"] as? String) ?? (entry["id"] as? String), !id.isEmpty else { return nil }
+            let efforts = (entry["supportedReasoningEfforts"] as? [[String: Any]] ?? [])
+                .compactMap { $0["reasoningEffort"] as? String }
+            let displayName = AgentRunnerText.nonEmpty(entry["displayName"] as? String) ?? id
+            return CodexModel(
+                id: id,
+                displayName: displayName,
+                efforts: efforts,
+                defaultEffort: entry["defaultReasoningEffort"] as? String,
+                isDefault: entry["isDefault"] as? Bool ?? false
+            )
+        }
     }
 
     static func methodNotFound(rpcID: String) -> Data {

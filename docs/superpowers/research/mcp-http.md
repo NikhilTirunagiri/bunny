@@ -129,6 +129,8 @@ this either. The combination that worked was `approval_policy="never"` **+**
 `-c` pair above is the mechanism to use programmatically). Bunny must set
 **both** `approvalPolicy: "never"` and `sandbox: "danger-full-access"` — `workspace-write`
 is not sufficient for unattended MCP tool calls.
+**Superseded:** `default_tools_approval_mode = "approve"` on the server entry fixes this under
+`workspace-write`. See "Codex approval — resolved" below.
 
 ### App-server `thread/start` (what Bunny actually uses) — VERIFIED
 ```jsonc
@@ -180,10 +182,10 @@ Confirmed via `codex mcp list`/`get`, and `config.toml` diffed back to identical
   trailing bare prompt string — always sequence flags so `--allowedTools` isn't
   immediately followed by the prompt, or use `--`.
 - **Codex approval is two-layered**: the top-level `approval_policy` governs shell/exec
-  approval; MCP tool calls have their own gate that, per this test, is only fully
-  bypassed by pairing `approval_policy: "never"` with `sandbox: "danger-full-access"`
-  (not `workspace-write`). Bunny should always launch Codex threads with both set this
-  way when it wants unattended MCP tool use.
+  approval; MCP tool calls have their own gate. The earlier conclusion here, that only
+  `danger-full-access` bypasses that gate, is **superseded**: the per-server
+  `default_tools_approval_mode = "approve"` works under `workspace-write`. See
+  "Codex approval — resolved".
 - **Codex config has no plaintext inline bearer token field** — `bearer_token` is
   rejected; use `bearer_token_env_var` (global config) or `http_headers` directly (CLI
   `-c` overrides / app-server `config` object both accept `http_headers` inline, which
@@ -200,3 +202,70 @@ Confirmed via `codex mcp list`/`get`, and `config.toml` diffed back to identical
 - Neither client requires `Mcp-Session-Id` or SSE for this flow — a plain
   request/response `POST /mcp` server is sufficient for both Claude Code and Codex as
   Bunny will use them (single JSON-RPC request → single JSON response).
+
+## Codex approval — resolved (verified 2026-09-24, codex-cli 0.155.0, `gpt-5.6-luna`)
+
+Bunny keeps `sandbox: "workspace-write"` and does not switch to `danger-full-access`. Every run
+below used `codex app-server --stdio` with `workspace-write` and the Bunny server in
+`thread/start` `config.mcp_servers.bunny`. The turn asked the model to call `create_task`, and a
+driver logged every server→client request. Drivers are in `.../scratchpad/d3/drive.py`, run logs in
+`.../scratchpad/d3/run-*.log`, and the server is `.../scratchpad/mcp-http/server.py`.
+
+| approvalPolicy | bunny server extra | server→client request for the MCP call | result |
+|---|---|---|---|
+| `"never"` | — | none | **fails**: `mcpToolCall` `status:"failed"`, error *"MCP tool call requires approval, but approval policy is never"* |
+| `"never"` | `default_tools_approval_mode = "approve"` | **none** | **works**: `mcpToolCall` completed, server log has the call |
+| `"on-request"` | — | `mcpServer/elicitation/request` (below) | works once the client replies `accept` |
+| `"on-request"` | `default_tools_approval_mode = "approve"` | **none** | works |
+| `{"granular": {sandbox_approval:false, rules:false, skill_approval:false, request_permissions:false, mcp_elicitations:true}}` | — | `mcpServer/elicitation/request` | works once accepted. Commands behave like `never`: a `touch` outside the workspace failed with *Operation not permitted*, and there was no approval request |
+
+`"on-request"` also asks for command escalation. `touch /Users/nt/…` produced
+`item/commandExecution/requestApproval` with `availableDecisions: ["accept",
+{"acceptWithExecpolicyAmendment": …}, "cancel"]`. So on-request is not a hands-off policy.
+
+The approval request Codex sends for an MCP tool call is an MCP elicitation, not an
+`item/*/requestApproval`:
+
+```json
+{"method":"mcpServer/elicitation/request","id":0,"params":{"threadId":"…","turnId":"…",
+ "serverName":"bunny","mode":"form",
+ "_meta":{"codex_approval_kind":"mcp_tool_call","persist":["session","always"],
+          "tool_description":"Create a task in Bunny","tool_params":{"title":"ProbeTask"}, …},
+ "message":"Allow the bunny MCP server to run tool \"create_task\"?",
+ "requestedSchema":{"type":"object","properties":{}}}}
+```
+
+The reply that works (`McpServerElicitationRequestResponse`) is
+`{"id":0,"result":{"action":"accept","content":null,"_meta":null}}`.
+
+The earlier section's `default_tools_approval_mode="auto"` does **not** help, because "auto" defers
+to tool annotations. `"approve"` does.
+
+### What Bunny does (`CodexRunner` / `CodexWire`)
+
+- **Approval policy is unchanged.** `.autonomous` sends `"never"` and `.askFirst` sends `"on-request"`,
+  always with `workspace-write`, so command and file approval semantics stay as they were.
+- **The Bunny server entry carries `default_tools_approval_mode: "approve"`:**
+  ```json
+  "config": {"mcp_servers": {"bunny": {
+    "url": "http://127.0.0.1:PORT/mcp",
+    "http_headers": {"Authorization": "Bearer TOKEN", "X-Bunny-Task": "UUID"},
+    "default_tools_approval_mode": "approve"}}}
+  ```
+  It is merged with `sandbox_workspace_write.writable_roots` when there are extra directories, and
+  re-sent on `thread/resume` together with the model, because a new app-server process does not have it.
+- **Defense in depth.** Any `mcpServer/elicitation/request` whose `serverName` is `"bunny"` is
+  auto-accepted with the reply above, in either autonomy mode, the same way Claude gets
+  `--allowedTools mcp__bunny`. Elicitations from other servers still get the existing
+  method-not-found reply. Command and file approvals keep the existing flow: they surface as
+  questions under `.askFirst`, and `"never"` never asks.
+- The gated live test `liveCodexCreatesTaskWithBunnyTools` (`BUNNY_LIVE_AGENT_TESTS=1`) runs the real
+  `CodexRunner` under `never` + `workspace-write` against
+  `Tests/BunnyCoreTests/FakeCLIs/fake_mcp_http.py`. It checks that `create_task` reached the server
+  with the right `X-Bunny-Task` header. `liveClaudeCodeCreatesTaskWithBunnyTools` does the same for
+  Claude with the real argv (`--mcp-config … --allowedTools mcp__bunny --append-system-prompt …`).
+
+**Global install (`codex mcp add bunny`)**: `config.toml` should also get
+`default_tools_approval_mode = "approve"` under `[mcp_servers.bunny]`. Otherwise sessions outside
+Bunny that run with `never` + `workspace-write` hit the same failure. (Inferred from the table above;
+not separately tested through `config.toml`.)

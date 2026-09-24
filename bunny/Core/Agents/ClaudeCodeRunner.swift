@@ -17,7 +17,19 @@ final class ClaudeCodeRunner: AgentRunner {
         self.options = options
     }
 
-    static func arguments(brief: AgentBrief, harness: AgentHarness, autonomy: AgentAutonomy, resumeSessionID: String?) -> [String] {
+    /// Flags that take a variadic list (`<values...>`): each would swallow any bare argument after it,
+    /// so `arguments` always follows their values with another `--flag` or ends argv (prompts go via stdin).
+    static let variadicFlags: Set<String> = ["--mcp-config", "--allowedTools", "--add-dir"]
+
+    static func arguments(
+        brief: AgentBrief,
+        harness: AgentHarness,
+        autonomy: AgentAutonomy,
+        resumeSessionID: String?,
+        model: String? = nil,
+        effort: String? = nil,
+        tools: BunnyToolsEndpoint? = nil
+    ) -> [String] {
         let permissionMode = autonomy == .autonomous ? "bypassPermissions" : "acceptEdits"
         var arguments = [
             "-p",
@@ -26,8 +38,19 @@ final class ClaudeCodeRunner: AgentRunner {
             "--verbose",
             "--permission-prompt-tool", "stdio",
             "--permission-mode", permissionMode,
-            "--append-system-prompt", AgentPromptBuilder.systemAppendix(for: harness),
         ]
+        if let model = AgentRunnerText.nonEmpty(model) {
+            arguments += ["--model", model]
+        }
+        if let effort = AgentRunnerText.nonEmpty(effort) {
+            arguments += ["--effort", effort]
+        }
+        if let tools {
+            // Both variadic: always followed by --append-system-prompt below, never by a bare argument.
+            arguments += ["--mcp-config", mcpConfigJSON(for: tools)]
+            arguments += ["--allowedTools", "mcp__\(BunnyToolsEndpoint.serverName)"]
+        }
+        arguments += ["--append-system-prompt", AgentPromptBuilder.systemAppendix(for: harness, toolsAvailable: tools != nil)]
         for directory in brief.extraDirectories {
             arguments += ["--add-dir", directory]
         }
@@ -37,13 +60,36 @@ final class ClaudeCodeRunner: AgentRunner {
         return arguments
     }
 
+    /// Inline `--mcp-config` JSON for Bunny's HTTP MCP server (verified shape, see mcp-http.md).
+    static func mcpConfigJSON(for tools: BunnyToolsEndpoint) -> String {
+        let config: [String: Any] = [
+            "mcpServers": [
+                BunnyToolsEndpoint.serverName: [
+                    "type": "http",
+                    "url": tools.url,
+                    "headers": tools.headers,
+                ],
+            ],
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: config, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
     func start(brief: AgentBrief, harness: AgentHarness, resumeSessionID: String?, initialMessage: String?) {
         guard process == nil, !didExit else { return }
         sessionID = resumeSessionID
 
         let process = AgentProcess(
             executable: options.cliPath,
-            arguments: Self.arguments(brief: brief, harness: harness, autonomy: options.autonomy, resumeSessionID: resumeSessionID),
+            arguments: Self.arguments(
+                brief: brief,
+                harness: harness,
+                autonomy: options.autonomy,
+                resumeSessionID: resumeSessionID,
+                model: options.model,
+                effort: options.effort,
+                tools: options.tools
+            ),
             cwd: brief.workingDirectory,
             environment: options.environment
         )
