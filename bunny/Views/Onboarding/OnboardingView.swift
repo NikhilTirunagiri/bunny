@@ -63,6 +63,6 @@ struct OnboardingView: View {
     private func finish() {
         UserDefaults.standard.set(true, forKey: "onboarding.completed")
         WindowManager.shared.closeOnboarding()
-        (NSApp.delegate as? AppDelegate)?.statusBarController.openPopover()
+        WindowManager.shared.onFinishOnboarding?()
     }
 }

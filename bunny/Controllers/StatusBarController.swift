@@ -87,6 +87,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         panelController = TaskPanelController(modelContainer: modelContainer)
         PanelCoordinator.shared.onClosePopover = { [weak self] in self?.closePopover() }
         WindowManager.shared.onWillShowWindow = { [weak self] in self?.closePopover() }
+        WindowManager.shared.onFinishOnboarding = { [weak self] in self?.openPopover() }
 
         restorePinnedTask()
         startUpdateTimer()

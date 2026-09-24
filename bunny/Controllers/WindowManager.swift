@@ -9,6 +9,9 @@ final class WindowManager: NSObject, NSWindowDelegate {
     enum SettingsTab: Hashable { case general, agents, about }
 
     var onWillShowWindow: (() -> Void)?
+    /// Set by `StatusBarController`; called when onboarding finishes so the popover opens.
+    /// (`NSApp.delegate as? AppDelegate` is nil under `@NSApplicationDelegateAdaptor`.)
+    var onFinishOnboarding: (() -> Void)?
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private let settingsSelection = SettingsSelection()
