@@ -297,6 +297,8 @@ final class AgentSupervisor {
         task.agentQuestionData = nil
         task.agentStartedAt = nil
         task.agentFinishedAt = nil
+        task.agentModel = nil
+        task.agentEffort = nil
         didChangeState()
     }
 
@@ -362,7 +364,7 @@ final class AgentSupervisor {
             return
         }
 
-        let options = AgentRunOptions(cliPath: cliPath, autonomy: AgentSettings.autonomy, environment: environment)
+        let options = runOptions(for: task, harness: request.harness, cliPath: cliPath, environment: environment)
         let runner: AgentRunner
         switch request.harness {
         case .claudeCode: runner = ClaudeCodeRunner(options: options)
@@ -377,6 +379,19 @@ final class AgentSupervisor {
         }
         runner.start(brief: request.brief, harness: request.harness,
                      resumeSessionID: request.resumeSessionID, initialMessage: request.initialMessage)
+    }
+
+    /// Model/effort: the task's per-run override, else Settings (blank = the CLI's default). Bunny tools are
+    /// attached only while the MCP server is running; the runners mention them in the system appendix then.
+    private func runOptions(for task: BunnyTask, harness: AgentHarness, cliPath: String,
+                            environment: [String: String]) -> AgentRunOptions {
+        let model = AgentRunnerText.nonEmpty(task.agentModel ?? AgentSettings.model(for: harness))
+        let effort = AgentRunnerText.nonEmpty(task.agentEffort ?? AgentSettings.effort(for: harness))
+        let tools = BunnyToolsServer.shared.isRunning
+            ? BunnyToolsEndpoint(url: AgentSettings.toolsURL, token: AgentSettings.toolsToken, taskID: task.id)
+            : nil
+        return AgentRunOptions(cliPath: cliPath, autonomy: AgentSettings.autonomy, environment: environment,
+                               model: model, effort: effort, tools: tools)
     }
 
     /// Opens the session in the owner's app and records which app was actually used (or the fallback text).

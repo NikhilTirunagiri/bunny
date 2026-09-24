@@ -28,6 +28,9 @@ final class BunnyTask {
     var agentStartedAt: Date? = nil
     var agentFinishedAt: Date? = nil
     var completedByAgent: Bool = false
+    /// Per-run model/effort override (spec §2), kept so resumes use the same settings. nil = use Settings.
+    var agentModel: String? = nil
+    var agentEffort: String? = nil
 
     init(title: String, parentID: UUID? = nil, sortOrder: Int = 0) {
         self.title = title

@@ -10,7 +10,15 @@ enum AgentSettings {
         static let autonomy = "agent.autonomy"
         static let openIn = "agent.openIn"
         static let defaultWorkspace = "agent.defaultWorkspace"
+        static let claudeModel = "agent.claude.model"
+        static let claudeEffort = "agent.claude.effort"
+        static let codexModel = "agent.codex.model"
+        static let codexEffort = "agent.codex.effort"
+        static let toolsToken = "bunnyTools.token"
+        static let toolsPort = "bunnyTools.port"
     }
+
+    static let defaultToolsPort = 47823
 
     private static var defaults: UserDefaults { .standard }
 
@@ -61,6 +69,55 @@ enum AgentSettings {
         case .claudeCode: claudePath = path
         case .codex: codexPath = path
         }
+    }
+
+    // MARK: - Model & effort (spec §2)
+
+    /// The default model for runs of `harness` ("" = the CLI's default).
+    static func model(for harness: AgentHarness) -> String {
+        trimmedString(harness == .claudeCode ? Key.claudeModel : Key.codexModel)
+    }
+
+    static func setModel(_ model: String, for harness: AgentHarness) {
+        defaults.set(model.trimmingCharacters(in: .whitespacesAndNewlines),
+                     forKey: harness == .claudeCode ? Key.claudeModel : Key.codexModel)
+    }
+
+    /// The default reasoning effort for runs of `harness` ("" = the CLI's default).
+    static func effort(for harness: AgentHarness) -> String {
+        trimmedString(harness == .claudeCode ? Key.claudeEffort : Key.codexEffort)
+    }
+
+    static func setEffort(_ effort: String, for harness: AgentHarness) {
+        defaults.set(effort.trimmingCharacters(in: .whitespacesAndNewlines),
+                     forKey: harness == .claudeCode ? Key.claudeEffort : Key.codexEffort)
+    }
+
+    // MARK: - Bunny tools (spec §5)
+
+    /// The port Bunny's MCP server tries first (default 47823). The server may end up on another
+    /// port when this one is taken; `toolsURL` always has the actual one.
+    static var toolsPort: Int {
+        get {
+            let stored = defaults.integer(forKey: Key.toolsPort)
+            return (1...65_535).contains(stored) ? stored : defaultToolsPort
+        }
+        set { defaults.set(newValue, forKey: Key.toolsPort) }
+    }
+
+    /// Bearer token for the MCP server: 32 random bytes as 64 hex chars, generated on first read.
+    /// Never log it.
+    static var toolsToken: String {
+        if let stored = defaults.string(forKey: Key.toolsToken), stored.count == 64 {
+            return stored
+        }
+        let token = randomHexToken(byteCount: 32)
+        defaults.set(token, forKey: Key.toolsToken)
+        return token
+    }
+
+    static var toolsURL: String {
+        "http://127.0.0.1:\(BunnyToolsServer.shared.port ?? toolsPort)/mcp"
     }
 
     static func commandName(for harness: AgentHarness) -> String {
@@ -121,6 +178,16 @@ enum AgentSettings {
     }
 
     // MARK: - Private
+
+    private static func trimmedString(_ key: String) -> String {
+        defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private static func randomHexToken(byteCount: Int) -> String {
+        var generator = SystemRandomNumberGenerator()
+        return (0..<byteCount).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max, using: &generator)) }
+            .joined()
+    }
 
     /// The trimmed, tilde-expanded stored path, or "".
     private static func storedPath(_ key: String) -> String {

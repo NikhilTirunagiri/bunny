@@ -24,6 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         UNUserNotificationCenter.current().delegate = self
+        // Bunny tools (spec §5): agents manage tasks through the local MCP server.
+        BunnyToolsServer.shared.backend = BunnyToolsBackendImpl(modelContainer: modelContainer)
+        BunnyToolsServer.shared.start()
         AgentSupervisor.shared.configure(modelContainer: modelContainer)
         statusBarController.setup(modelContainer: modelContainer)
 
@@ -39,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         AgentSupervisor.shared.shutdownAll()
+        BunnyToolsServer.shared.stop()
     }
 
     // MARK: - UNUserNotificationCenterDelegate
