@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        AgentSupervisor.shared.shutdownAll()
+    }
+
     // MARK: - UNUserNotificationCenterDelegate
 
     /// Show banners even while Bunny is the active app (e.g. the popover is open).

@@ -42,6 +42,7 @@ final class AgentSupervisor {
     /// Called once from AppDelegate. Recovers runs interrupted by quitting Bunny (spec §7).
     func configure(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
+        AgentSettings.warmUp()
 
         for task in allTasks() {
             if task.runState == .running {
@@ -64,6 +65,25 @@ final class AgentSupervisor {
         }
         RunLoop.main.add(timer, forMode: .common)
         checkTimer = timer
+    }
+
+    /// Called when Bunny quits: terminates every live agent process. Running tasks become `stopped`
+    /// (as launch recovery would); `needsInput` stays so answering later resumes the session.
+    func shutdownAll() {
+        checkTimer?.invalidate()
+        checkTimer = nil
+        let live = runners
+        runners.removeAll()
+        wrapUps.removeAll()
+        for (taskID, runner) in live {
+            runner.terminate()
+            if let task = task(with: taskID), task.runState == .running {
+                task.runState = .stopped
+                task.agentActivity = "Interrupted — Bunny quit"
+                task.agentFinishedAt = Date()
+            }
+        }
+        try? context?.save()
     }
 
     // MARK: - Queries

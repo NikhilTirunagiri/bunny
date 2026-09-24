@@ -70,6 +70,26 @@ enum AgentSettings {
         }
     }
 
+    /// Resolves the login-shell PATH and the CLI locations on a background queue, so the first agent start
+    /// (or the first Settings read) doesn't block the main thread on a cold login shell (up to 3 s each).
+    static func warmUp() {
+        let needsClaude = storedPath(Key.claudePath) == nil && locatedPaths["claude"] == nil
+        let needsCodex = storedPath(Key.codexPath) == nil && locatedPaths["codex"] == nil
+        DispatchQueue.global(qos: .utility).async {
+            // ShellEnvironment is Foundation-only and thread-safe (lock-protected cache, per-call temp files).
+            // In the app target it is implicitly @MainActor (default isolation), so Swift 5 mode warns here.
+            _ = ShellEnvironment.loginPATH()
+            let claude = needsClaude ? ShellEnvironment.locate("claude") : nil
+            let codex = needsCodex ? ShellEnvironment.locate("codex") : nil
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if let claude, locatedPaths["claude"] == nil { locatedPaths["claude"] = claude }
+                    if let codex, locatedPaths["codex"] == nil { locatedPaths["codex"] = codex }
+                }
+            }
+        }
+    }
+
     // MARK: - Private
 
     /// A non-empty stored path (an empty string means "not set": fall back to auto-detection).
