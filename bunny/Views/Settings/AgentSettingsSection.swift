@@ -75,8 +75,9 @@ struct AgentSettingsSection: View {
             }
             Button("Detect") {
                 // Off the main thread: ShellEnvironment.locate runs a login shell (up to 3 s).
+                // `refresh: true` bypasses the cached miss, so Detect finds a CLI installed since launch.
                 DispatchQueue.global(qos: .userInitiated).async {
-                    guard let located = ShellEnvironment.locate(cliName) else { return }
+                    guard let located = ShellEnvironment.locate(cliName, refresh: true) else { return }
                     DispatchQueue.main.async {
                         path.wrappedValue = located
                         save(located)
