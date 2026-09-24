@@ -2,6 +2,22 @@ import AppKit
 import Foundation
 import os
 
+/// What `SessionLauncher.open` ended up doing.
+enum SessionLaunchOutcome: Equatable {
+    /// The session was opened in this app (the preferred one, or Terminal as the fallback).
+    case opened(OpenInApp)
+    /// Nothing could be opened; the resume command was copied to the pasteboard. The text explains it for the panel.
+    case copiedToPasteboard(String)
+
+    /// One line for the task's activity.
+    var activityText: String {
+        switch self {
+        case let .opened(app): return "Opened in \(app.displayName)"
+        case let .copiedToPasteboard(text): return text
+        }
+    }
+}
+
 /// Executes `SessionLaunchPlanner` steps to open an agent session in the owner's preferred app.
 @MainActor
 enum SessionLauncher {
@@ -12,18 +28,26 @@ enum SessionLauncher {
         let message: String
     }
 
-    /// Executes SessionLaunchPlanner steps; on failure falls back to the Terminal plan; last resort copies the resume command to the pasteboard and returns it.
-    @discardableResult
-    static func open(harness: AgentHarness, sessionID: String, cwd: String) -> String? {
+    /// Executes SessionLaunchPlanner steps; on failure falls back to the Terminal plan; last resort copies the
+    /// resume command to the pasteboard. Waits for `/usr/bin/open` to report success before calling it opened.
+    static func open(harness: AgentHarness, sessionID: String, cwd: String) async -> SessionLaunchOutcome {
         let cliPath = AgentSettings.cliPath(for: harness)
-        let app = AgentSettings.openIn
+        guard !cliPath.isEmpty, FileManager.default.isExecutableFile(atPath: cliPath) else {
+            // Opening a terminal on `exec ''` would just fail there. Hand over a command that works in a login shell.
+            let command = SessionLaunchPlanner.resumeCommand(
+                harness: harness, cliPath: AgentSettings.commandName(for: harness), sessionID: sessionID, cwd: cwd)
+            copyToPasteboard(command)
+            return .copiedToPasteboard(
+                "\(harness.displayName) not found — set its path in Settings → Agents. Resume command copied: \(command)")
+        }
 
+        let app = AgentSettings.openIn
         if app != .terminal {
             if AgentSettings.isInstalled(app) {
                 let steps = SessionLaunchPlanner.plan(app: app, harness: harness, cliPath: cliPath, sessionID: sessionID, cwd: cwd)
                 do {
-                    try execute(steps)
-                    return nil
+                    try await execute(steps)
+                    return .opened(app)
                 } catch {
                     logFailure(app.displayName, error)
                 }
@@ -34,17 +58,21 @@ enum SessionLauncher {
 
         let terminalSteps = SessionLaunchPlanner.plan(app: .terminal, harness: harness, cliPath: cliPath, sessionID: sessionID, cwd: cwd)
         do {
-            try execute(terminalSteps)
-            return nil
+            try await execute(terminalSteps)
+            return .opened(.terminal)
         } catch {
             logFailure(OpenInApp.terminal.displayName, error)
         }
 
         let command = SessionLaunchPlanner.resumeCommand(harness: harness, cliPath: cliPath, sessionID: sessionID, cwd: cwd)
+        copyToPasteboard(command)
+        return .copiedToPasteboard("Couldn't open the app — resume command copied: \(command)")
+    }
+
+    private static func copyToPasteboard(_ string: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(command, forType: .string)
-        return command
+        pasteboard.setString(string, forType: .string)
     }
 
     private static func logFailure(_ target: String, _ error: Error) {
@@ -54,7 +82,7 @@ enum SessionLauncher {
 
     // MARK: - Steps
 
-    private static func execute(_ steps: [LaunchStep]) throws {
+    private static func execute(_ steps: [LaunchStep]) async throws {
         // Check what can be checked up front, so a failure falls back before anything was opened.
         for step in steps {
             try preflight(step)
@@ -62,9 +90,9 @@ enum SessionLauncher {
         for step in steps {
             switch step {
             case let .runCommandFile(script):
-                try runCommandFile(script)
+                try await runCommandFile(script)
             case let .exec(executable, arguments):
-                try exec(executable, arguments)
+                try await exec(executable, arguments)
             case let .openURL(string, delay):
                 // preflight validated the URL and that an app handles its scheme.
                 guard let url = URL(string: string) else { continue }
@@ -96,18 +124,38 @@ enum SessionLauncher {
         }
     }
 
-    private static func exec(_ executable: String, _ arguments: [String]) throws {
+    /// `/usr/bin/open` exits promptly, so its status is awaited and a non-zero exit (e.g. app missing) throws.
+    /// Editor CLIs are only launched: they may stay attached to the editor for a while.
+    private static func exec(_ executable: String, _ arguments: [String]) async throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try process.run()
+
+        guard executable == "/usr/bin/open" else {
+            try process.run()
+            return
+        }
+        let status: Int32 = try await withCheckedThrowingContinuation { continuation in
+            process.terminationHandler = { finished in
+                continuation.resume(returning: finished.terminationStatus)
+            }
+            do {
+                try process.run()
+            } catch {
+                process.terminationHandler = nil
+                continuation.resume(throwing: error)
+            }
+        }
+        guard status == 0 else {
+            throw LaunchError(message: "open \(arguments.joined(separator: " ")) exited with status \(status)")
+        }
     }
 
     /// Writes `~/Library/Application Support/Bunny/launch/<uuid>.command` (0755), opens it with Terminal and deletes it after 60 s.
-    private static func runCommandFile(_ script: String) throws {
+    private static func runCommandFile(_ script: String) async throws {
         let fileManager = FileManager.default
         guard let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             throw LaunchError(message: "No Application Support directory")
@@ -120,7 +168,7 @@ enum SessionLauncher {
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
 
         do {
-            try exec("/usr/bin/open", ["-a", "Terminal", file.path])
+            try await exec("/usr/bin/open", ["-a", "Terminal", file.path])
         } catch {
             try? fileManager.removeItem(at: file)
             throw error

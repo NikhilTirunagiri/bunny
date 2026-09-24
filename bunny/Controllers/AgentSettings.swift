@@ -19,14 +19,15 @@ enum AgentSettings {
         set { defaults.set(newValue.rawValue, forKey: Key.defaultHarness) }
     }
 
-    /// Stored path, else the CLI found on the login-shell PATH, else "".
+    /// The stored path only ("" = not set). Getters never auto-detect: detection runs a login shell,
+    /// so it happens off the main thread in `warmUp()` / `detect(_:completion:)`, which store what they find.
     static var claudePath: String {
-        get { storedPath(Key.claudePath) ?? located("claude") }
+        get { storedPath(Key.claudePath) }
         set { defaults.set(newValue, forKey: Key.claudePath) }
     }
 
     static var codexPath: String {
-        get { storedPath(Key.codexPath) ?? located("codex") }
+        get { storedPath(Key.codexPath) }
         set { defaults.set(newValue, forKey: Key.codexPath) }
     }
 
@@ -55,6 +56,20 @@ enum AgentSettings {
         }
     }
 
+    static func setCLIPath(_ path: String, for harness: AgentHarness) {
+        switch harness {
+        case .claudeCode: claudePath = path
+        case .codex: codexPath = path
+        }
+    }
+
+    static func commandName(for harness: AgentHarness) -> String {
+        switch harness {
+        case .claudeCode: return "claude"
+        case .codex: return "codex"
+        }
+    }
+
     /// Terminal is always available; the others must be installed in /Applications.
     static func isInstalled(_ app: OpenInApp) -> Bool {
         guard let bundle = applicationBundlePath(app) else { return true }
@@ -70,21 +85,36 @@ enum AgentSettings {
         }
     }
 
-    /// Resolves the login-shell PATH and the CLI locations on a background queue, so the first agent start
-    /// (or the first Settings read) doesn't block the main thread on a cold login shell (up to 3 s each).
+    /// At launch: warms the login-shell PATH on a background queue and stores the location of each CLI
+    /// whose path isn't set yet. Never overwrites a path the owner set.
     static func warmUp() {
-        let needsClaude = storedPath(Key.claudePath) == nil && locatedPaths["claude"] == nil
-        let needsCodex = storedPath(Key.codexPath) == nil && locatedPaths["codex"] == nil
+        let missing = AgentHarness.allCases.filter { cliPath(for: $0).isEmpty }
+        let names = missing.map { ($0, commandName(for: $0)) }
         DispatchQueue.global(qos: .utility).async {
-            // ShellEnvironment is Foundation-only and thread-safe (lock-protected cache, per-call temp files).
-            // In the app target it is implicitly @MainActor (default isolation), so Swift 5 mode warns here.
             _ = ShellEnvironment.loginPATH()
-            let claude = needsClaude ? ShellEnvironment.locate("claude") : nil
-            let codex = needsCodex ? ShellEnvironment.locate("codex") : nil
+            let found = names.compactMap { harness, name in ShellEnvironment.locate(name).map { (harness, $0) } }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    if let claude, locatedPaths["claude"] == nil { locatedPaths["claude"] = claude }
-                    if let codex, locatedPaths["codex"] == nil { locatedPaths["codex"] = codex }
+                    for (harness, path) in found where cliPath(for: harness).isEmpty {
+                        setCLIPath(path, for: harness)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Explicit detection (Settings/Onboarding "Detect", or a start with no path set): locates the CLI on a
+    /// background queue with a fresh lookup, stores the path when found, then calls `completion` on main.
+    static func detect(_ harness: AgentHarness, completion: @escaping @MainActor @Sendable (String?) -> Void) {
+        let name = commandName(for: harness)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let path = ShellEnvironment.locate(name, refresh: true)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if let path {
+                        setCLIPath(path, for: harness)
+                    }
+                    completion(path)
                 }
             }
         }
@@ -92,20 +122,9 @@ enum AgentSettings {
 
     // MARK: - Private
 
-    /// A non-empty stored path (an empty string means "not set": fall back to auto-detection).
-    private static func storedPath(_ key: String) -> String? {
+    /// The trimmed, tilde-expanded stored path, or "".
+    private static func storedPath(_ key: String) -> String {
         let stored = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return stored.isEmpty ? nil : (stored as NSString).expandingTildeInPath
-    }
-
-    /// Successful lookups are cached for the process lifetime: `locate` runs a login shell (up to 3 s).
-    /// Misses are not cached, so a CLI installed while Bunny runs is found on the next attempt.
-    private static var locatedPaths: [String: String] = [:]
-
-    private static func located(_ name: String) -> String {
-        if let cached = locatedPaths[name] { return cached }
-        guard let path = ShellEnvironment.locate(name) else { return "" }
-        locatedPaths[name] = path
-        return path
+        return stored.isEmpty ? "" : (stored as NSString).expandingTildeInPath
     }
 }

@@ -14,17 +14,36 @@ final class AgentSupervisor {
     private(set) var attentionCount: Int = 0
 
     /// Live runners keyed by task id. A runner leaves this map when its task stops being active,
-    /// so events from a retired runner (e.g. the `exited` after a terminate) are ignored.
+    /// so events from a retired runner are ignored (except its `exited`, see `terminating`).
     private var runners: [UUID: AgentRunner] = [:]
 
-    private enum WrapUpPhase {
+    /// Runs being prepared off the main thread (CLI detection, login-shell environment), not yet started.
+    private var pendingLaunches: [UUID: PendingLaunch] = [:]
+
+    private struct PendingLaunch {
+        let token = UUID()
+        let harness: AgentHarness
+        let brief: AgentBrief
+        let resumeSessionID: String?
+        let initialMessage: String?
+        /// Resume-with-answer only: the question to restore if the CLI turns out to be missing.
+        let restoreQuestion: Data?
+    }
+
+    private enum WrapUpPhase: Equatable {
         /// Timer expired: the turn was interrupted; the wrap-up message has not been sent yet.
         case interrupting
-        /// The wrap-up message was sent; its reply is the summary.
-        case awaitingSummary
+        /// The wrap-up message was sent; its reply is the summary. `interruptedTurnSeen` is false when the
+        /// message went out on the 1 s fallback, before the interrupted turn reported its (failed) end.
+        case awaitingSummary(interruptedTurnSeen: Bool)
     }
 
     @ObservationIgnored private var modelContainer: ModelContainer?
+    /// Retired runners whose process may still be alive (stop's grace period, handoff), until `exited`.
+    /// `shutdownAll` terminates these too.
+    @ObservationIgnored private var terminating: [ObjectIdentifier: AgentRunner] = [:]
+    /// Actions waiting for a retired runner's `exited` (or a timeout), keyed like `terminating`.
+    @ObservationIgnored private var exitWaiters: [ObjectIdentifier: (token: UUID, action: () -> Void)] = [:]
     @ObservationIgnored private var wrapUps: [UUID: WrapUpPhase] = [:]
     /// Subtask ids in the order they were numbered in the brief (for `<bunny-subtasks-done>`).
     @ObservationIgnored private var briefSubtaskIDs: [UUID: [UUID]] = [:]
@@ -34,6 +53,8 @@ final class AgentSupervisor {
 
     private static let wrapUpMessage = "Time's up — stop here and reply with a summary of what's done and what's left."
     private static let timeRanOutSuffix = " · Time ran out"
+    private static let handoffExitTimeout: TimeInterval = 2
+    private static let stopGracePeriod: TimeInterval = 3
 
     private var context: ModelContext? { modelContainer?.mainContext }
 
@@ -44,7 +65,8 @@ final class AgentSupervisor {
         self.modelContainer = modelContainer
         AgentSettings.warmUp()
 
-        for task in allTasks() {
+        let all = (try? modelContainer.mainContext.fetch(FetchDescriptor<BunnyTask>())) ?? []
+        for task in all {
             if task.runState == .running {
                 task.runState = .stopped
                 task.agentActivity = "Interrupted — Bunny quit"
@@ -67,14 +89,20 @@ final class AgentSupervisor {
         checkTimer = timer
     }
 
-    /// Called when Bunny quits: terminates every live agent process. Running tasks become `stopped`
-    /// (as launch recovery would); `needsInput` stays so answering later resumes the session.
+    /// Called when Bunny quits: terminates every agent process, live or still in its grace period.
+    /// Running tasks become `stopped` (as launch recovery would); `needsInput` stays so answering resumes.
     func shutdownAll() {
         checkTimer?.invalidate()
         checkTimer = nil
         let live = runners
         runners.removeAll()
+        pendingLaunches.removeAll()
         wrapUps.removeAll()
+        exitWaiters.removeAll()
+        for runner in terminating.values {
+            runner.terminate()
+        }
+        terminating.removeAll()
         for (taskID, runner) in live {
             runner.terminate()
             if let task = task(with: taskID), task.runState == .running {
@@ -88,8 +116,9 @@ final class AgentSupervisor {
 
     // MARK: - Queries
 
+    /// A runner is running for the task, or one is being prepared.
     func isLive(_ taskID: UUID) -> Bool {
-        runners[taskID] != nil
+        runners[taskID] != nil || pendingLaunches[taskID] != nil
     }
 
     // MARK: - Actions
@@ -104,16 +133,18 @@ final class AgentSupervisor {
     }
 
     func start(_ task: BunnyTask, harness: AgentHarness?) {
-        guard context != nil, !task.runState.isActive, runners[task.id] == nil else { return }
+        guard context != nil, !task.runState.isActive, !isLive(task.id) else { return }
         let harness = harness ?? AgentSettings.defaultHarness
 
-        wrapUps[task.id] = nil
-
-        guard cliIsAvailable(for: harness) else {
+        // A set but unusable path fails right away; an unset one is detected off the main thread below.
+        let cliPath = AgentSettings.cliPath(for: harness)
+        if !cliPath.isEmpty && !Self.isExecutableFile(cliPath) {
             // Keeps any previous harness/session pair intact, so that session can still be opened.
             failMissingCLI(task, harness: harness)
             return
         }
+
+        wrapUps[task.id] = nil
         // A new run is a new session (the previous one, if any, is replaced on `sessionStarted`).
         task.agentHarness = harness.rawValue
         task.agentSessionID = nil
@@ -139,7 +170,8 @@ final class AgentSupervisor {
         task.agentActivity = "Starting…"
         didChangeState()
 
-        launch(task.id, harness: harness, brief: brief, resumeSessionID: nil, initialMessage: nil)
+        prepareLaunch(task.id, PendingLaunch(harness: harness, brief: brief, resumeSessionID: nil,
+                                             initialMessage: nil, restoreQuestion: nil))
     }
 
     func answer(_ task: BunnyTask, with answer: AgentAnswer) {
@@ -153,20 +185,22 @@ final class AgentSupervisor {
             didChangeState()
             return
         }
+        guard pendingLaunches[task.id] == nil else { return }
 
-        // No live runner (Bunny was restarted, or the process exited): resume the session with the answer.
+        // No live runner (Bunny was restarted, or the process exited). The persisted question's request id
+        // belonged to the dead process, so never `runner.answer` it: resume the session with the answer as text.
         let harness = task.harness ?? AgentSettings.defaultHarness
-        guard cliIsAvailable(for: harness) else {
+        let cliPath = AgentSettings.cliPath(for: harness)
+        if !cliPath.isEmpty && !Self.isExecutableFile(cliPath) {
             // Keep the question so the owner can answer again after fixing the path.
-            task.agentActivity = "\(harness.displayName) not found — set its path in Settings → Agents."
+            task.agentActivity = Self.missingCLIMessage(harness)
             didChangeState()
             return
         }
 
         let brief = makeBrief(for: task, workingDirectory: task.agentWorkingDirectory)
-        let questionText = Self.questionText(question)
-        let summary = answer.summary(for: question)
-        let resumeMessage = "Answer to your earlier question \"\(questionText)\": \(summary)"
+        let resumeMessage = "Answer to your earlier question \"\(Self.questionText(question))\": \(answer.summary(for: question))"
+        let savedQuestion = task.agentQuestionData
 
         task.agentHarness = harness.rawValue
         task.agentWorkingDirectory = brief.workingDirectory
@@ -176,23 +210,24 @@ final class AgentSupervisor {
         task.agentActivity = "Resuming…"
         didChangeState()
 
+        let request: PendingLaunch
         if let sessionID = task.agentSessionID {
-            launch(task.id, harness: harness, brief: brief, resumeSessionID: sessionID, initialMessage: resumeMessage)
+            request = PendingLaunch(harness: harness, brief: brief, resumeSessionID: sessionID,
+                                    initialMessage: resumeMessage, restoreQuestion: savedQuestion)
         } else {
             // No session to resume: start over with the brief plus the answer.
             let prompt = AgentPromptBuilder.prompt(for: brief, now: Date()) + "\n\n" + resumeMessage
-            launch(task.id, harness: harness, brief: brief, resumeSessionID: nil, initialMessage: prompt)
+            request = PendingLaunch(harness: harness, brief: brief, resumeSessionID: nil,
+                                    initialMessage: prompt, restoreQuestion: savedQuestion)
         }
+        prepareLaunch(task.id, request)
     }
 
     /// Interrupt, then terminate after 3 s (so the CLI can save the session). State `stopped`.
     func stop(_ task: BunnyTask) {
+        pendingLaunches[task.id] = nil
         if let runner = runners.removeValue(forKey: task.id) {
-            runner.interrupt()
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(3))
-                runner.terminate()
-            }
+            retire(runner, interruptFirst: true)
         }
         wrapUps[task.id] = nil
         guard task.runState.isActive else {
@@ -208,35 +243,43 @@ final class AgentSupervisor {
 
     func openSession(_ task: BunnyTask) {
         guard let sessionID = task.agentSessionID else {
-            start(task, harness: nil)
+            if task.runState.isActive {
+                // Running but the CLI hasn't reported its session yet: nothing to open, and never a second run.
+                task.agentActivity = "Still starting…"
+            } else {
+                start(task, harness: nil)
+            }
             return
         }
         let harness = task.harness ?? AgentSettings.defaultHarness
+        let taskID = task.id
 
         if task.runState.isActive {
-            // One process per session: stop the background one before the owner takes over.
-            if let runner = runners.removeValue(forKey: task.id) {
-                runner.terminate()
-            }
-            wrapUps[task.id] = nil
+            // One process per session: stop the background one, and open the app only once it has exited.
+            pendingLaunches[taskID] = nil
+            wrapUps[taskID] = nil
             task.runState = .handedOff
             task.agentQuestionData = nil
             task.agentFinishedAt = Date()
-            task.agentActivity = "Opened in \(AgentSettings.openIn.displayName)"
+            task.agentActivity = "Opening…"
+            didChangeState()
+            if let runner = runners.removeValue(forKey: taskID) {
+                retire(runner, interruptFirst: false)
+                whenExited(runner, timeout: Self.handoffExitTimeout) { [weak self] in
+                    self?.launchSession(taskID, harness: harness, sessionID: sessionID)
+                }
+                return
+            }
         }
-
-        let cwd = task.agentWorkingDirectory ?? AgentSettings.defaultWorkspace
-        if let fallback = SessionLauncher.open(harness: harness, sessionID: sessionID, cwd: cwd) {
-            task.agentActivity = "Couldn't open the app — resume command copied: \(fallback)"
-        }
-        didChangeState()
+        launchSession(taskID, harness: harness, sessionID: sessionID)
     }
 
     /// Resets the agent fields of a task that isn't running an agent.
     func clear(_ task: BunnyTask) {
         guard !task.runState.isActive else { return }
+        pendingLaunches[task.id] = nil
         if let runner = runners.removeValue(forKey: task.id) {
-            runner.terminate()
+            retire(runner, interruptFirst: false)
         }
         wrapUps[task.id] = nil
         briefSubtaskIDs[task.id] = nil
@@ -256,9 +299,12 @@ final class AgentSupervisor {
     func taskWillArchiveOrDelete(_ taskID: UUID) {
         if let task = task(with: taskID) {
             stop(task)
-        } else if let runner = runners.removeValue(forKey: taskID) {
-            runner.terminate()
+        } else {
+            pendingLaunches[taskID] = nil
             wrapUps[taskID] = nil
+            if let runner = runners.removeValue(forKey: taskID) {
+                retire(runner, interruptFirst: false)
+            }
         }
         briefSubtaskIDs[taskID] = nil
         expiredTimers.remove(taskID)
@@ -266,14 +312,54 @@ final class AgentSupervisor {
 
     // MARK: - Launch
 
-    private func launch(_ taskID: UUID, harness: AgentHarness, brief: AgentBrief, resumeSessionID: String?, initialMessage: String?) {
-        let options = AgentRunOptions(
-            cliPath: AgentSettings.cliPath(for: harness),
-            autonomy: AgentSettings.autonomy,
-            environment: ShellEnvironment.environment()
-        )
+    /// Keeps the task in its "Starting…"/"Resuming…" running state while the CLI path (if unset) and the
+    /// login-shell environment are resolved off the main thread, then starts the runner on main.
+    private func prepareLaunch(_ taskID: UUID, _ request: PendingLaunch) {
+        pendingLaunches[taskID] = request
+        let token = request.token
+        if AgentSettings.cliPath(for: request.harness).isEmpty {
+            AgentSettings.detect(request.harness) { [weak self] _ in
+                self?.resolveEnvironment(taskID, token: token)
+            }
+        } else {
+            resolveEnvironment(taskID, token: token)
+        }
+    }
+
+    private func resolveEnvironment(_ taskID: UUID, token: UUID) {
+        guard pendingLaunches[taskID]?.token == token else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let environment = ShellEnvironment.environment()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.completeLaunch(taskID, token: token, environment: environment)
+                }
+            }
+        }
+    }
+
+    private func completeLaunch(_ taskID: UUID, token: UUID, environment: [String: String]) {
+        // Stopped, handed off, cleared or replaced meanwhile → drop this launch.
+        guard let request = pendingLaunches[taskID], request.token == token else { return }
+        pendingLaunches[taskID] = nil
+        guard let task = task(with: taskID), task.runState == .running, runners[taskID] == nil else { return }
+
+        let cliPath = AgentSettings.cliPath(for: request.harness)
+        guard Self.isExecutableFile(cliPath) else {
+            if let question = request.restoreQuestion {
+                task.runState = .needsInput
+                task.agentQuestionData = question
+                task.agentActivity = Self.missingCLIMessage(request.harness)
+                didChangeState()
+            } else {
+                failMissingCLI(task, harness: request.harness)
+            }
+            return
+        }
+
+        let options = AgentRunOptions(cliPath: cliPath, autonomy: AgentSettings.autonomy, environment: environment)
         let runner: AgentRunner
-        switch harness {
+        switch request.harness {
         case .claudeCode: runner = ClaudeCodeRunner(options: options)
         case .codex: runner = CodexRunner(options: options)
         }
@@ -284,11 +370,56 @@ final class AgentSupervisor {
             guard let self, let runner else { return }
             self.handle(event, taskID: taskID, from: runner)
         }
-        runner.start(brief: brief, harness: harness, resumeSessionID: resumeSessionID, initialMessage: initialMessage)
+        runner.start(brief: request.brief, harness: request.harness,
+                     resumeSessionID: request.resumeSessionID, initialMessage: request.initialMessage)
     }
 
-    private func cliIsAvailable(for harness: AgentHarness) -> Bool {
-        let path = AgentSettings.cliPath(for: harness)
+    /// Opens the session in the owner's app and records which app was actually used (or the fallback text).
+    private func launchSession(_ taskID: UUID, harness: AgentHarness, sessionID: String) {
+        guard let task = task(with: taskID) else { return }
+        let cwd = task.agentWorkingDirectory ?? AgentSettings.defaultWorkspace
+        Task { @MainActor [weak self] in
+            let outcome = await SessionLauncher.open(harness: harness, sessionID: sessionID, cwd: cwd)
+            guard let self, let task = self.task(with: taskID), !task.runState.isActive else { return }
+            task.agentActivity = outcome.activityText
+            self.didChangeState()
+        }
+    }
+
+    /// Takes a runner out of service. It stays in `terminating` (reachable by `shutdownAll`) until it exits.
+    private func retire(_ runner: AgentRunner, interruptFirst: Bool) {
+        terminating[ObjectIdentifier(runner)] = runner
+        if interruptFirst {
+            runner.interrupt()
+            let grace = Self.stopGracePeriod
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(grace))
+                runner.terminate()
+            }
+        } else {
+            runner.terminate()
+        }
+    }
+
+    /// Runs `action` once, when the retired `runner` reports `exited` or after `timeout`, whichever is first.
+    private func whenExited(_ runner: AgentRunner, timeout: TimeInterval, _ action: @escaping () -> Void) {
+        let key = ObjectIdentifier(runner)
+        let token = UUID()
+        exitWaiters[key] = (token, action)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(timeout))
+            self?.fireExitWaiter(key, token: token)
+        }
+    }
+
+    /// `token` nil = the runner exited; otherwise only the waiter registered with that token fires.
+    private func fireExitWaiter(_ key: ObjectIdentifier, token: UUID?) {
+        guard let waiter = exitWaiters[key], token == nil || waiter.token == token else { return }
+        exitWaiters[key] = nil
+        waiter.action()
+    }
+
+    private static func isExecutableFile(_ path: String) -> Bool {
         guard !path.isEmpty else { return false }
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
@@ -296,9 +427,13 @@ final class AgentSupervisor {
             && FileManager.default.isExecutableFile(atPath: path)
     }
 
+    private static func missingCLIMessage(_ harness: AgentHarness) -> String {
+        "\(harness.displayName) not found — set its path in Settings → Agents."
+    }
+
     private func failMissingCLI(_ task: BunnyTask, harness: AgentHarness) {
         task.runState = .failed
-        task.agentSummary = "\(harness.displayName) not found — set its path in Settings → Agents."
+        task.agentSummary = Self.missingCLIMessage(harness)
         task.agentActivity = ""
         task.agentFinishedAt = Date()
         didChangeState()
@@ -338,22 +473,34 @@ final class AgentSupervisor {
         )
     }
 
+    /// Non-archived children in list order (`sortOrder`, then `createdAt`) — the brief's numbering.
     private func subtasks(of task: BunnyTask) -> [BunnyTask] {
-        allTasks()
-            .filter { $0.parentID == task.id && $0.archivedAt == nil }
-            .sorted { lhs, rhs in
-                lhs.sortOrder != rhs.sortOrder ? lhs.sortOrder < rhs.sortOrder : lhs.createdAt < rhs.createdAt
-            }
+        guard let context else { return [] }
+        let parentID: UUID? = task.id
+        let descriptor = FetchDescriptor<BunnyTask>(
+            predicate: #Predicate { $0.parentID == parentID && $0.archivedAt == nil },
+            sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]
+        )
+        return (try? context.fetch(descriptor)) ?? []
     }
 
     // MARK: - Events
 
     private func handle(_ event: AgentEvent, taskID: UUID, from runner: AgentRunner) {
-        // Ignore events from a runner that was retired (stopped, handed off, finished, replaced).
+        let key = ObjectIdentifier(runner)
+        if terminating[key] != nil {
+            // A retired runner: only its exit matters (it may unblock a handoff).
+            if case .exited = event {
+                terminating[key] = nil
+                fireExitWaiter(key, token: nil)
+            }
+            return
+        }
+        // Ignore events from a runner that isn't the task's current one.
         guard let current = runners[taskID], current === runner else { return }
         guard let task = task(with: taskID) else {
             runners[taskID] = nil
-            runner.terminate()
+            retire(runner, interruptFirst: false)
             return
         }
 
@@ -373,15 +520,22 @@ final class AgentSupervisor {
             notify("\(task.title) needs your input", taskID: taskID)
 
         case let .turnFinished(text, success):
-            if wrapUps[taskID] == .interrupting {
+            switch wrapUps[taskID] {
+            case .interrupting?:
                 // The interrupted turn ended: keep the runner and ask for the wrap-up summary now.
-                sendWrapUp(taskID)
+                sendWrapUp(taskID, interruptedTurnSeen: true)
                 return
+            case .awaitingSummary(interruptedTurnSeen: false)? where !success:
+                // The interrupted turn's own end, arriving after the 1 s fallback send: the summary is still to come.
+                wrapUps[taskID] = .awaitingSummary(interruptedTurnSeen: true)
+                return
+            default:
+                break
             }
             finishTurn(task, text: text, success: success)
-            runners[taskID] = nil
             // One turn per handoff: follow-ups resume the session in a new process.
-            runner.terminate()
+            runners[taskID] = nil
+            retire(runner, interruptFirst: false)
 
         case let .failed(message):
             wrapUps[taskID] = nil
@@ -390,7 +544,7 @@ final class AgentSupervisor {
             task.agentQuestionData = nil
             task.agentFinishedAt = Date()
             runners[taskID] = nil
-            runner.terminate()
+            retire(runner, interruptFirst: false)
 
         case .exited:
             wrapUps[taskID] = nil
@@ -407,7 +561,8 @@ final class AgentSupervisor {
 
     private func finishTurn(_ task: BunnyTask, text: String, success: Bool) {
         let now = Date()
-        if wrapUps.removeValue(forKey: task.id) == .awaitingSummary {
+        let phase = wrapUps.removeValue(forKey: task.id)
+        if case .awaitingSummary? = phase {
             // Timer ran out: the reply is a summary, not a completion (no green).
             task.runState = .stopped
             task.agentSummary = applyCompletedSubtasks(text, to: task, at: now)
@@ -434,8 +589,9 @@ final class AgentSupervisor {
         let (cleaned, numbers) = AgentMarkers.extractCompletedSubtasks(from: text)
         guard !numbers.isEmpty else { return cleaned }
 
-        let byID = Dictionary(allTasks().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let ordered = (briefSubtaskIDs[task.id] ?? subtasks(of: task).map(\.id)).compactMap { byID[$0] }
+        let current = subtasks(of: task)
+        let byID = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let ordered = (briefSubtaskIDs[task.id] ?? current.map(\.id)).compactMap { byID[$0] }
         for number in Set(numbers) where number >= 1 && number <= ordered.count {
             let subtask = ordered[number - 1]
             guard !subtask.isCompleted else { continue }
@@ -449,8 +605,20 @@ final class AgentSupervisor {
     // MARK: - Timer
 
     private func checkTimers() {
-        guard context != nil else { return }
-        let tasks = allTasks()
+        guard let context else { return }
+        // Also picks up archives/deletions made elsewhere (only a needsInput task can be counted).
+        if attentionCount > 0 {
+            recomputeAttention()
+        }
+        // Timer expiry only matters for active runs; skip the fetch when there are none.
+        guard !runners.isEmpty || attentionCount > 0 else { return }
+
+        let running = AgentRunState.running.rawValue
+        let needsInput = AgentRunState.needsInput.rawValue
+        let descriptor = FetchDescriptor<BunnyTask>(
+            predicate: #Predicate { $0.timerDuration != nil && ($0.agentState == running || $0.agentState == needsInput) }
+        )
+        let tasks = (try? context.fetch(descriptor)) ?? []
         for task in tasks {
             guard task.isTimerExpired else {
                 expiredTimers.remove(task.id)
@@ -467,7 +635,7 @@ final class AgentSupervisor {
                 let taskID = task.id
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .seconds(1))
-                    self?.sendWrapUp(taskID)
+                    self?.sendWrapUp(taskID, interruptedTurnSeen: false)
                 }
             case .needsInput:
                 if !task.agentActivity.hasSuffix(Self.timeRanOutSuffix) {
@@ -477,26 +645,22 @@ final class AgentSupervisor {
                 break
             }
         }
-        // Also picks up archives/deletions made elsewhere.
-        recomputeAttention(tasks)
     }
 
     /// Sends the wrap-up request once: when the interrupted turn ends, or 1 s after the interrupt.
-    private func sendWrapUp(_ taskID: UUID) {
+    private func sendWrapUp(_ taskID: UUID, interruptedTurnSeen: Bool) {
         guard wrapUps[taskID] == .interrupting, let runner = runners[taskID] else { return }
-        wrapUps[taskID] = .awaitingSummary
+        wrapUps[taskID] = .awaitingSummary(interruptedTurnSeen: interruptedTurnSeen)
         runner.send(Self.wrapUpMessage)
     }
 
     // MARK: - Helpers
 
-    private func allTasks() -> [BunnyTask] {
-        guard let context else { return [] }
-        return (try? context.fetch(FetchDescriptor<BunnyTask>())) ?? []
-    }
-
     private func task(with id: UUID) -> BunnyTask? {
-        allTasks().first { $0.id == id }
+        guard let context else { return nil }
+        var descriptor = FetchDescriptor<BunnyTask>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return (try? context.fetch(descriptor))?.first
     }
 
     private func didChangeState() {
@@ -504,8 +668,13 @@ final class AgentSupervisor {
         try? context?.save()
     }
 
-    private func recomputeAttention(_ tasks: [BunnyTask]? = nil) {
-        let count = (tasks ?? allTasks()).filter { $0.runState == .needsInput && $0.archivedAt == nil }.count
+    private func recomputeAttention() {
+        guard let context else { return }
+        let needsInput = AgentRunState.needsInput.rawValue
+        let descriptor = FetchDescriptor<BunnyTask>(
+            predicate: #Predicate { $0.agentState == needsInput && $0.archivedAt == nil }
+        )
+        let count = (try? context.fetchCount(descriptor)) ?? attentionCount
         if count != attentionCount {
             attentionCount = count
         }
