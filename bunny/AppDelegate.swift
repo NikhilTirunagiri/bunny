@@ -10,7 +10,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         NSApp.setActivationPolicy(.accessory)
 
         do {
-            modelContainer = try ModelContainer(for: BunnyTask.self, ShelfItem.self)
+            // Dedicated store (never the shared `Application Support/default.store`), seeded once
+            // by copying the old sandboxed build's store; the originals are left as a backup.
+            let storeURL = try StoreMigration.prepareStore()
+            modelContainer = try ModelContainer(for: BunnyTask.self, ShelfItem.self,
+                                                configurations: ModelConfiguration(url: storeURL))
         } catch {
             fatalError("ModelContainer init failed: \(error)")
         }
