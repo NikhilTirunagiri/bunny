@@ -22,7 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MidnightScheduler.shared.modelContext = modelContainer.mainContext
         MidnightScheduler.shared.schedule()
 
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        if !UserDefaults.standard.bool(forKey: "onboarding.completed") {
+            WindowManager.shared.showOnboarding()
+        } else {
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
