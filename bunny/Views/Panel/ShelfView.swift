@@ -4,13 +4,16 @@ import AppKit
 
 struct ShelfView: View {
     let taskID: UUID
+    /// False while the panel puts an agent question first: hides the placeholder, keeps items.
+    var showsEmptyDropZone: Bool = true
     @Environment(\.modelContext) private var modelContext
     @Query private var items: [ShelfItem]
     @State private var isTargeted = false
     @State private var hoveredID: UUID?
 
-    init(taskID: UUID) {
+    init(taskID: UUID, showsEmptyDropZone: Bool = true) {
         self.taskID = taskID
+        self.showsEmptyDropZone = showsEmptyDropZone
         _items = Query(filter: #Predicate<ShelfItem> { $0.taskID == taskID },
                        sort: [SortDescriptor(\ShelfItem.sortOrder), SortDescriptor(\ShelfItem.addedAt)])
     }
@@ -25,12 +28,11 @@ struct ShelfView: View {
                 Spacer()
             }
             if items.isEmpty {
-                emptyZone
+                if showsEmptyDropZone { emptyZone }
             } else {
-                ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(items) { item in row(item) }
-                    }
+                // The panel's content already scrolls; no nested scroll view.
+                VStack(spacing: 2) {
+                    ForEach(items) { item in row(item) }
                 }
             }
         }

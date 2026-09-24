@@ -7,6 +7,8 @@ struct TaskPanelView: View {
     @Query private var matches: [BunnyTask]
     @State private var titleDraft = ""
     @FocusState private var focus: Field?
+    /// An agent-question text field has focus (reported by `AgentPanelSection`).
+    @State private var answerFieldFocused = false
     private enum Field { case title, description }
 
     init(taskID: UUID) {
@@ -25,7 +27,9 @@ struct TaskPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onHover { $0 ? coordinator.panelEntered() : coordinator.panelExited() }
-        .onChange(of: focus) { _, f in coordinator.setEditing(f != nil) }
+        // One combined signal so moving focus between the description and an answer field never
+        // briefly releases the editing hold (which would let the panel switch mid-typing).
+        .onChange(of: focus != nil || answerFieldFocused) { _, editing in coordinator.setEditing(editing) }
     }
 
     @ViewBuilder
@@ -44,21 +48,14 @@ struct TaskPanelView: View {
                 .onAppear { titleDraft = task.title }
                 .onChange(of: focus) { old, _ in if old == .title { commitTitle(task) } }
                 .onChange(of: task.title) { _, new in if focus != .title { titleDraft = new } }
-            PanelMetaLine(task: task)
-            ZStack(alignment: .topLeading) {
-                if task.taskDescription.isEmpty {
-                    Text("Add a description…").font(.system(size: 13)).foregroundStyle(.tertiary)
-                        .padding(.top, 1).allowsHitTesting(false)
+            // Everything below the title scrolls so a tall question form never clips its buttons.
+            GeometryReader { proxy in
+                ScrollView {
+                    scrollContent(task, needsInput: task.runState == .needsInput && !task.isSubtask)
+                        .frame(minHeight: proxy.size.height, alignment: .top)
                 }
-                TextEditor(text: $task.taskDescription)
-                    .font(.system(size: 13))
-                    .scrollContentBackground(.hidden)
-                    .focused($focus, equals: .description)
+                .scrollIndicators(.automatic)
             }
-            .frame(minHeight: 60, maxHeight: 180)
-            ShelfView(taskID: task.id)
-            Spacer(minLength: 0)
-            agentSection(task)
         }
         .padding(16)
         .onDisappear {
@@ -70,9 +67,41 @@ struct TaskPanelView: View {
         }
     }
 
+    /// While the agent needs input the question comes first: the agent section moves up, the
+    /// description collapses and the empty-shelf drop zone is hidden (existing shelf items stay).
+    @ViewBuilder
+    private func scrollContent(_ task: BunnyTask, needsInput: Bool) -> some View {
+        @Bindable var task = task
+        VStack(alignment: .leading, spacing: 12) {
+            PanelMetaLine(task: task)
+            if needsInput {
+                agentSection(task)
+            }
+            ZStack(alignment: .topLeading) {
+                if task.taskDescription.isEmpty {
+                    Text("Add a description…").font(.system(size: 13)).foregroundStyle(.tertiary)
+                        .padding(.top, 1).allowsHitTesting(false)
+                }
+                TextEditor(text: $task.taskDescription)
+                    .font(.system(size: 13))
+                    .scrollContentBackground(.hidden)
+                    .focused($focus, equals: .description)
+            }
+            .frame(height: needsInput ? 36 : 120)
+            ShelfView(taskID: task.id, showsEmptyDropZone: !needsInput)
+            if !needsInput {
+                Spacer(minLength: 0)
+                agentSection(task)
+            }
+        }
+    }
+
+    /// Agents belong to parent tasks only (spec): subtasks get no agent section.
     @ViewBuilder
     private func agentSection(_ task: BunnyTask) -> some View {
-        AgentPanelSection(task: task)
+        if !task.isSubtask {
+            AgentPanelSection(task: task, onAnswerFieldFocusChange: { answerFieldFocused = $0 })
+        }
     }
 
     private func commitTitle(_ task: BunnyTask) {

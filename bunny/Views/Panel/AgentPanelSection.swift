@@ -5,6 +5,8 @@ import SwiftUI
 /// already glass, so nothing inside uses `.glassEffect`.
 struct AgentPanelSection: View {
     let task: BunnyTask
+    /// Reports whether an answer text field has focus, so the panel holds its editing lock while typing.
+    var onAnswerFieldFocusChange: (Bool) -> Void = { _ in }
     @Environment(TimerManager.self) private var timerManager
 
     private var harness: AgentHarness { task.harness ?? AgentSettings.defaultHarness }
@@ -39,7 +41,7 @@ struct AgentPanelSection: View {
                         .lineLimit(2)
                 }
                 if task.runState == .needsInput, let question = task.pendingQuestion {
-                    QuestionForm(task: task, question: question)
+                    QuestionForm(task: task, question: question, onFocusChange: onAnswerFieldFocusChange)
                         .id(task.agentQuestionData)
                 }
                 if showsSummary {
@@ -154,6 +156,10 @@ struct AgentPanelSection: View {
 private struct QuestionForm: View {
     let task: BunnyTask
     let question: AgentQuestion
+    let onFocusChange: (Bool) -> Void
+
+    /// item.key of the focused "Other…"/freeform field.
+    @FocusState private var focusedKey: String?
 
     /// item.key -> chosen option labels.
     @State private var selections: [String: [String]] = [:]
@@ -171,6 +177,9 @@ private struct QuestionForm: View {
                 sendRow
             }
         }
+        .onChange(of: focusedKey) { _, key in onFocusChange(key != nil) }
+        // Answering (or a new question) tears the form down without a focus change.
+        .onDisappear { onFocusChange(false) }
     }
 
     // MARK: - Choices / freeform
@@ -190,6 +199,7 @@ private struct QuestionForm: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 12.5))
                     .lineLimit(3...6)
+                    .focused($focusedKey, equals: item.key)
                     .padding(6)
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.quaternary.opacity(0.4)))
             } else {
@@ -201,6 +211,7 @@ private struct QuestionForm: View {
                 if item.allowsOther {
                     TextField("Other…", text: textBinding(item.key))
                         .textFieldStyle(.plain)
+                        .focused($focusedKey, equals: item.key)
                         .font(.system(size: 12.5))
                         .padding(6)
                         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.quaternary.opacity(0.4)))
