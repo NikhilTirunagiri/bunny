@@ -18,7 +18,7 @@ struct CodexWireTests {
         #expect(threadResponse)
         #expect(hasDelta)
         #expect(incoming.contains(.agentMessage("OK")))
-        #expect(incoming.last == .turnCompleted(status: "completed", error: nil))
+        #expect(incoming.last == .turnCompleted(turnID: "01a0d1be-9289-7d90-a540-f5121a030b9b", status: "completed", error: nil))
     }
 
     @Test func parsesUnsupportedRequestFromRun3Fixture() throws {
@@ -37,7 +37,7 @@ struct CodexWireTests {
         #expect(CodexWire.parse(commandStarted) == .commandStarted("git status"))
         #expect(CodexWire.parse(commandApproval) == .approvalRequest(rpcID: "7", method: "item/commandExecution/requestApproval", title: "Run command", detail: "git status"))
         #expect(CodexWire.parse(fileApproval) == .approvalRequest(rpcID: "edit-1", method: "item/fileChange/requestApproval", title: "Edit files", detail: "Update source"))
-        #expect(CodexWire.parse(failed) == .turnCompleted(status: "failed", error: "boom"))
+        #expect(CodexWire.parse(failed) == .turnCompleted(turnID: "turn-1", status: "failed", error: "boom"))
     }
 
     @Test func parsesResponsesAndIgnoresMalformedJSON() {

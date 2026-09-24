@@ -22,4 +22,14 @@ struct JSONLineBuffer {
 
         return lines
     }
+
+    /// Returns the buffered unterminated trailing line (without a trailing "\r"), if non-empty, and clears it. Call at EOF.
+    mutating func flush() -> Data? {
+        var line = buffer
+        buffer = Data()
+        if line.last == 0x0D {
+            line.removeLast()
+        }
+        return line.isEmpty ? nil : line
+    }
 }

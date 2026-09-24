@@ -13,11 +13,12 @@ final class CodexRunner: AgentRunner {
     private var launch: (brief: AgentBrief, harness: AgentHarness, resumeSessionID: String?, firstMessage: String)?
     private var nextRequestID = 3
     private var threadReady = false
-    /// Messages sent before the thread existed; flushed as turns once it does.
+    /// Messages waiting for the thread to exist or the running turn to finish; sent one turn at a time, in order.
     private var queuedMessages: [String] = []
     /// Request ids of `turn/start` calls whose response has not arrived yet.
     private var pendingTurnRequests: Set<Int> = []
     private var currentTurnID: String?
+    private var lastCompletedTurnID: String?
     private var turnInFlight = false
     private var messageDelta = ""
     private var lastMessage = ""
@@ -63,18 +64,11 @@ final class CodexRunner: AgentRunner {
         }
     }
 
+    /// Starts a new turn, or queues `text` until the thread exists / the running turn completes.
     func send(_ text: String) {
         guard let process, process.isRunning else { return }
-        guard threadReady, let threadID = sessionID else {
-            queuedMessages.append(text)
-            return
-        }
-        let id = takeRequestID()
-        pendingTurnRequests.insert(id)
-        turnInFlight = true
-        messageDelta = ""
-        lastMessage = ""
-        process.write(CodexWire.turnStart(id: id, threadID: threadID, text: text))
+        queuedMessages.append(text)
+        startNextQueuedTurn()
     }
 
     func interrupt() {
@@ -89,6 +83,18 @@ final class CodexRunner: AgentRunner {
     }
 
     // MARK: - Private
+
+    private func startNextQueuedTurn() {
+        guard threadReady, !turnInFlight, let threadID = sessionID, let process, !queuedMessages.isEmpty else { return }
+        let text = queuedMessages.removeFirst()
+        let id = takeRequestID()
+        pendingTurnRequests.insert(id)
+        turnInFlight = true
+        currentTurnID = nil
+        messageDelta = ""
+        lastMessage = ""
+        process.write(CodexWire.turnStart(id: id, threadID: threadID, text: text))
+    }
 
     private func takeRequestID() -> Int {
         defer { nextRequestID += 1 }
@@ -112,8 +118,8 @@ final class CodexRunner: AgentRunner {
             }
         case let .commandStarted(command):
             emit(.activity(AgentRunnerText.truncated("Running \(AgentRunnerText.activityLine(command))")))
-        case let .turnCompleted(status, error):
-            handleTurnCompleted(status: status, error: error)
+        case let .turnCompleted(turnID, status, error):
+            handleTurnCompleted(turnID: turnID, status: status, error: error)
         case let .approvalRequest(rpcID, method, title, detail):
             emit(.question(AgentQuestion(
                 kind: .approval,
@@ -162,26 +168,32 @@ final class CodexRunner: AgentRunner {
             sessionID = resolvedID
             threadReady = true
             emit(.sessionStarted(resolvedID))
-            let messages = [launch.firstMessage] + queuedMessages
-            queuedMessages = []
-            for message in messages {
-                send(message)
-            }
+            queuedMessages.insert(launch.firstMessage, at: 0)
+            startNextQueuedTurn()
 
         default:
             guard pendingTurnRequests.remove(id) != nil else { return }
             if let error {
                 turnInFlight = false
                 emit(.turnFinished(text: error, success: false))
+                startNextQueuedTurn()
             } else if let turnID {
                 currentTurnID = turnID
             }
         }
     }
 
-    private func handleTurnCompleted(status: String, error: String?) {
+    private func handleTurnCompleted(turnID: String?, status: String, error: String?) {
+        // Only the running turn's completion counts; drop duplicates and stale turns.
+        guard turnInFlight else { return }
+        if let turnID {
+            if let currentTurnID, turnID != currentTurnID { return }
+            if turnID == lastCompletedTurnID { return }
+            lastCompletedTurnID = turnID
+        }
         turnInFlight = false
         currentTurnID = nil
+        defer { startNextQueuedTurn() }
         let message = lastMessage.isEmpty ? messageDelta : lastMessage
         messageDelta = ""
         switch status {

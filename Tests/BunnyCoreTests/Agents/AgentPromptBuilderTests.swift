@@ -58,6 +58,9 @@ struct AgentPromptBuilderTests {
         let codex = AgentPromptBuilder.systemAppendix(for: .codex)
         #expect(claude.contains("AskUserQuestion"))
         #expect(codex.contains("<bunny-question>"))
+        #expect(codex.contains("Only include a <bunny-question> block if you cannot continue without the user's decision."))
+        #expect(codex.contains("Never add one after finishing the task."))
+        #expect(!claude.contains("<bunny-question>"))
         #expect(claude.contains("<bunny-subtasks-done>"))
         #expect(codex.contains("<bunny-subtasks-done>"))
     }

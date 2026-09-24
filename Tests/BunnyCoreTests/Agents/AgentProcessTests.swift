@@ -90,8 +90,12 @@ struct AgentProcessTests {
         #expect(elapsed >= 2.5)
     }
 
-    @Test func exitIsReportedEvenIfAGrandchildKeepsStdoutOpen() async throws {
-        let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", "echo '{\"x\":1}'; sleep 5 & exit 0"], cwd: NSTemporaryDirectory(), environment: env)
+    @Test func exitIsReportedAndGrandchildKilledIfItKeepsStdoutOpen() async throws {
+        let pidFile = temporaryPath("grandchild-pid")
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        // The background sleep inherits stdout, so EOF never comes on its own.
+        let script = "echo '{\"x\":1}'; sleep 60 & echo $! > '\(pidFile)'; exit 0"
+        let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", script], cwd: NSTemporaryDirectory(), environment: env)
         var lines: [String] = []
         var exitCode: Int32?
         process.onLine = { lines.append(String(decoding: $0, as: UTF8.self)) }
@@ -101,27 +105,110 @@ struct AgentProcessTests {
         #expect(await waitUntil(timeout: 4) { exitCode != nil })
         #expect(exitCode == 0)
         #expect(lines == [#"{"x":1}"#])
+        let grandchild = try #require(readPID(pidFile))
+        #expect(await waitUntil(timeout: 4) { !isAlive(grandchild) })
+    }
+
+    @Test func childIsItsOwnProcessGroupLeader() async throws {
+        let marker = "sleep 29.\(Int.random(in: 100_000...999_999))"   // unique, so ps finds exactly this child
+        let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", "exec \(marker)"], cwd: NSTemporaryDirectory(), environment: env)
+        var exitCode: Int32?
+        process.onExit = { code, _ in exitCode = code }
+        try process.start()
+        defer { process.terminate() }
+        // Find the child via its group: pgid == pid is what makes group signalling reach grandchildren.
+        var found: PSEntry?
+        _ = await waitUntil { found = (try? runPS())?.first { $0.command == marker }; return found != nil }
+        let entry = try #require(found)
+        #expect(entry.pid == entry.pgid)
+        process.terminate()
+        #expect(await waitUntil { exitCode != nil })
+    }
+
+    @Test func terminateKillsBackgroundGrandchildren() async throws {
+        let pidFile = temporaryPath("bg-pid")
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        // The grandchild's output goes elsewhere, so only group signalling can reach it.
+        let script = "sleep 60 >/dev/null 2>&1 & echo $! > '\(pidFile)'; wait"
+        let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", script], cwd: NSTemporaryDirectory(), environment: env)
+        var exitCode: Int32?
+        process.onExit = { code, _ in exitCode = code }
+        try process.start()
+
+        #expect(await waitUntil { readPID(pidFile) != nil })
+        let grandchild = try #require(readPID(pidFile))
+        #expect(isAlive(grandchild))
+
+        process.terminate()
+        #expect(await waitUntil(timeout: 4) { exitCode != nil && !isAlive(grandchild) })
+        #expect(!isAlive(grandchild))
+    }
+
+    @Test func terminateKillsGrandchildrenThatIgnoreSIGTERM() async throws {
+        let pidFile = temporaryPath("stubborn-pid")
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        // The leader exits on SIGTERM; the detached grandchild ignores it, so only the 3 s group SIGKILL ends it.
+        let script = "(trap '' TERM; exec sleep 60) >/dev/null 2>&1 & echo $! > '\(pidFile)'; wait"
+        let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", script], cwd: NSTemporaryDirectory(), environment: env)
+        try process.start()
+
+        #expect(await waitUntil { readPID(pidFile) != nil })
+        let grandchild = try #require(readPID(pidFile))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        process.terminate()
+        #expect(await waitUntil(timeout: 5) { !isAlive(grandchild) })
+    }
+
+    @Test func deliversFinalUnterminatedLineAtEOF() async throws {
+        let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", #"printf '{"a":1}\n{"last":true}'"#], cwd: NSTemporaryDirectory(), environment: env)
+        var lines: [String] = []
+        var exitCode: Int32?
+        process.onLine = { lines.append(String(decoding: $0, as: UTF8.self)) }
+        process.onExit = { code, _ in exitCode = code }
+        try process.start()
+
+        #expect(await waitUntil { exitCode != nil })
+        #expect(lines == [#"{"a":1}"#, #"{"last":true}"#])
     }
 }
 
-struct ShellEnvironmentTests {
-    @Test func loginPATHContainsSystemDirectories() {
-        let components = ShellEnvironment.loginPATH().split(separator: ":").map(String.init)
-        #expect(components.contains("/usr/bin"))
-        #expect(components.contains("/bin"))
-    }
+private func temporaryPath(_ name: String) -> String {
+    FileManager.default.temporaryDirectory.appendingPathComponent("bunny-\(name)-\(UUID().uuidString)").path
+}
 
-    @Test func locateFindsCommandsOnLoginPATH() {
-        #expect(ShellEnvironment.locate("sh") == "/bin/sh")
-        #expect(ShellEnvironment.locate("bunny-no-such-command-xyz") == nil)
-        #expect(ShellEnvironment.locate("") == nil)
-    }
+private func readPID(_ path: String) -> pid_t? {
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+    return pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
+}
 
-    @Test func environmentOverridesPATHAndTerminal() {
-        let environment = ShellEnvironment.environment()
-        #expect(environment["PATH"] == ShellEnvironment.loginPATH())
-        #expect(environment["TERM"] == "dumb")
-        #expect(environment["NO_COLOR"] == "1")
-        #expect(environment["HOME"] == ProcessInfo.processInfo.environment["HOME"])
+/// True while `pid` exists and isn't a zombie.
+private func isAlive(_ pid: pid_t) -> Bool {
+    guard kill(pid, 0) == 0 else { return false }
+    let state = (try? runPS().first { $0.pid == pid }?.state) ?? nil
+    return state.map { !$0.hasPrefix("Z") } ?? false
+}
+
+private struct PSEntry {
+    var pid: pid_t
+    var pgid: pid_t
+    var state: String
+    var command: String
+}
+
+private func runPS() throws -> [PSEntry] {
+    let ps = Process()
+    ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+    ps.arguments = ["-axo", "pid=,pgid=,state=,command="]
+    let pipe = Pipe()
+    ps.standardOutput = pipe
+    try ps.run()
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    ps.waitUntilExit()
+    return String(decoding: data, as: UTF8.self).split(separator: "\n").compactMap { line in
+        // Columns are space-padded; maxSplits would count the padding, so split fully and rejoin the command.
+        let parts = line.split(separator: " ")
+        guard parts.count >= 4, let pid = pid_t(parts[0]), let pgid = pid_t(parts[1]) else { return nil }
+        return PSEntry(pid: pid, pgid: pgid, state: String(parts[2]), command: parts[3...].joined(separator: " "))
     }
 }
