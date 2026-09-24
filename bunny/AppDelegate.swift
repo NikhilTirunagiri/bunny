@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        WindowManager.applyAppearance(UserDefaults.standard.string(forKey: "appearance") ?? "system")
 
         do {
             // Dedicated store (never the shared `Application Support/default.store`), seeded once

@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 
 /// Settings → Agents (spec §8): default harness, CLI paths, autonomy, open-in app, default workspace.
-/// `@State` mirrors are seeded from `AgentSettings` in `.onAppear` and written back on change,
-/// so a fresh Settings window always reflects auto-detected paths.
+/// `@State` mirrors are re-seeded from `AgentSettings` each time the pane appears and written back on
+/// change. A CLI path that is still empty on appear (launch-time detection not finished, or found
+/// nothing) triggers `AgentSettings.detect` off the main thread and fills the field if it finds one.
 struct AgentSettingsSection: View {
     @State private var defaultHarness: AgentHarness = .claudeCode
     @State private var claudePath: String = ""
@@ -25,9 +26,9 @@ struct AgentSettingsSection: View {
             }
 
             Section("CLI paths") {
-                pathRow(title: "Claude Code", path: $claudePath, cliName: "claude") { AgentSettings.claudePath = $0 }
+                pathRow(.claudeCode, path: $claudePath)
                     .onChange(of: claudePath) { _, new in AgentSettings.claudePath = new }
-                pathRow(title: "Codex", path: $codexPath, cliName: "codex") { AgentSettings.codexPath = $0 }
+                pathRow(.codex, path: $codexPath)
                     .onChange(of: codexPath) { _, new in AgentSettings.codexPath = new }
             }
 
@@ -61,27 +62,22 @@ struct AgentSettingsSection: View {
         .onAppear(perform: load)
     }
 
-    private func pathRow(title: String, path: Binding<String>, cliName: String, save: @escaping (String) -> Void) -> some View {
+    private func pathRow(_ harness: AgentHarness, path: Binding<String>) -> some View {
         HStack {
             Circle()
                 .fill(FileManager.default.isExecutableFile(atPath: path.wrappedValue) ? Color.green : Color.red)
                 .frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13))
-                TextField("Path to \(cliName)", text: path)
+                Text(harness.displayName).font(.system(size: 13))
+                TextField("Path to \(AgentSettings.commandName(for: harness))", text: path)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11, design: .monospaced))
-                    .onSubmit { save(path.wrappedValue) }
+                    .onSubmit { AgentSettings.setCLIPath(path.wrappedValue, for: harness) }
             }
             Button("Detect") {
-                // Off the main thread: ShellEnvironment.locate runs a login shell (up to 3 s).
-                // `refresh: true` bypasses the cached miss, so Detect finds a CLI installed since launch.
-                DispatchQueue.global(qos: .userInitiated).async {
-                    guard let located = ShellEnvironment.locate(cliName, refresh: true) else { return }
-                    DispatchQueue.main.async {
-                        path.wrappedValue = located
-                        save(located)
-                    }
+                // Off the main thread with a fresh lookup (finds a CLI installed since launch); stores what it finds.
+                AgentSettings.detect(harness) { located in
+                    if let located { path.wrappedValue = located }
                 }
             }
         }
@@ -106,7 +102,23 @@ struct AgentSettingsSection: View {
         claudePath = AgentSettings.claudePath
         codexPath = AgentSettings.codexPath
         autonomy = AgentSettings.autonomy
-        openIn = AgentSettings.openIn
+        // Never a blank picker: an uninstalled stored app shows (and opens in) Terminal.
+        openIn = AgentSettings.isInstalled(AgentSettings.openIn) ? AgentSettings.openIn : .terminal
         defaultWorkspace = AgentSettings.defaultWorkspace
+        detectIfEmpty(.claudeCode, path: $claudePath)
+        detectIfEmpty(.codex, path: $codexPath)
+    }
+
+    /// Fills an empty path field once detection returns (unless the owner typed one meanwhile).
+    private func detectIfEmpty(_ harness: AgentHarness, path: Binding<String>) {
+        guard path.wrappedValue.isEmpty else { return }
+        AgentSettings.detect(harness) { located in
+            if path.wrappedValue.isEmpty {
+                if let located { path.wrappedValue = located }
+            } else {
+                // `detect` stored what it found; the owner's typed path wins.
+                AgentSettings.setCLIPath(path.wrappedValue, for: harness)
+            }
+        }
     }
 }

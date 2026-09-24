@@ -39,6 +39,16 @@ final class WindowManager: NSObject, NSWindowDelegate {
 
     func closeOnboarding() { onboardingWindow?.close() }
 
+    /// Applies the "appearance" setting ("system" / "light" / "dark") to every Bunny window
+    /// (Settings, Onboarding, the task panel). The popover also follows it via `ContentView`.
+    static func applyAppearance(_ value: String) {
+        switch value {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: NSApp.appearance = nil
+        }
+    }
+
     private func makeWindow<V: View>(title: String, size: NSSize, root: V) -> NSWindow {
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                               styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],

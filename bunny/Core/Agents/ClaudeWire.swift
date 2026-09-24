@@ -165,7 +165,7 @@ enum ClaudeWire {
 
     /// Adds answers keyed by exact question text to the original AskUserQuestion input.
     static func answeredInput(for question: AgentQuestion, answer: AgentAnswer) -> Data {
-        var input = question.rawInput.flatMap(jsonObject) ?? [:]
+        var input = question.rawInput.flatMap { jsonObject($0) } ?? [:]
         var answers: [String: String] = [:]
         for item in question.items {
             answers[item.key] = (answer.selections[item.key] ?? []).joined(separator: ", ")

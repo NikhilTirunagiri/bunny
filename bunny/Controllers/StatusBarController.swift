@@ -104,7 +104,9 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
     private func startUpdateTimer() {
         let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.updateMenuBarItem()
+            MainActor.assumeIsolated {
+                self?.updateMenuBarItem()
+            }
         }
         RunLoop.main.add(t, forMode: .common)
         updateTimer = t

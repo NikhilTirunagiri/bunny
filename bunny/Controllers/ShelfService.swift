@@ -37,7 +37,7 @@ enum ShelfService {
     /// Resolves the bookmark. Returns nil when the file is gone. Refreshes stale bookmarks and cached path/name.
     static func resolve(_ item: ShelfItem) -> URL? {
         var stale = false
-        guard let url = try? URL(resolvingBookmarkData: item.bookmark, options: [.withoutUI],
+        guard let url = try? URL(resolvingBookmarkData: item.bookmark, options: [.withoutUI, .withoutMounting],
                                  relativeTo: nil, bookmarkDataIsStale: &stale),
               FileManager.default.fileExists(atPath: url.path) else { return nil }
         let path = ShelfRules.normalizedPath(url)

@@ -40,6 +40,7 @@ struct GeneralSettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
+                    .onChange(of: appearance) { _, value in WindowManager.applyAppearance(value) }
                 }
 
                 Section {

@@ -73,6 +73,9 @@ final class BunnyTask {
         agentHarness.flatMap(AgentHarness.init(rawValue:))
     }
 
+    /// Main-actor: `AgentQuestion`'s `Decodable` conformance is main-actor-isolated in the app target
+    /// (default isolation). All callers (panel, supervisor) are on the main actor.
+    @MainActor
     var pendingQuestion: AgentQuestion? {
         guard let agentQuestionData else { return nil }
         return try? JSONDecoder().decode(AgentQuestion.self, from: agentQuestionData)

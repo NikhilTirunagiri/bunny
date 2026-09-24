@@ -93,7 +93,8 @@ struct AgentsPage: View {
     }
 
     @State private var defaultHarness = AgentSettings.defaultHarness
-    @State private var openIn = AgentSettings.openIn
+    /// Falls back to Terminal when the stored app was uninstalled, so the picker is never blank.
+    @State private var openIn = AgentSettings.isInstalled(AgentSettings.openIn) ? AgentSettings.openIn : .terminal
     @State private var claudeStatus: DetectionStatus = .detecting
     @State private var codexStatus: DetectionStatus = .detecting
 
