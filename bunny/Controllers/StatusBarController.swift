@@ -86,9 +86,9 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     func openPopover() {
         guard !popover.isShown, let button = statusItem.button else { return }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        if let window = popover.contentViewController?.view.window {
+        if let contentView = popover.contentViewController?.view, let window = contentView.window {
             window.makeKey()
-            panelController.attach(to: window)
+            panelController.attach(to: window, contentView: contentView)
         }
         installMonitors()
     }
@@ -99,6 +99,11 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     }
 
     // MARK: - NSPopoverDelegate
+
+    func popoverWillClose(_ notification: Notification) {
+        // Hide the side panel as soon as closing starts, not after the popover's fade-out.
+        panelController.hide()
+    }
 
     func popoverDidClose(_ notification: Notification) {
         removeMonitors()
@@ -118,11 +123,16 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
                 self.closePopover()
             }
         }
-        // Esc: unlock the panel, then close. Leave Esc alone while a text field is being edited.
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+        // Esc in the popover or side panel: unlock the panel, then close. Other windows (e.g. the timer-picker
+        // popover) keep their own Esc; a text view actively in use (text or IME composition) gets Esc too.
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             let consumed = MainActor.assumeIsolated { () -> Bool in
-                guard event.keyCode == 53 else { return false }
-                if event.window?.firstResponder is NSTextView { return false }
+                guard let self, event.keyCode == 53, let window = event.window,
+                      window === self.popover.contentViewController?.view.window
+                        || window === self.panelController.window else { return false }
+                if let tv = window.firstResponder as? NSTextView, tv.hasMarkedText() || !tv.string.isEmpty {
+                    return false
+                }
                 PanelCoordinator.shared.escape()
                 return true
             }
