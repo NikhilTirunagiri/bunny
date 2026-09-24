@@ -104,12 +104,11 @@ final class AgentSupervisor {
         exitWaiters.removeAll()
         pendingHandoffs.removeAll()
         // Synchronous: the app is about to exit, so terminate()'s delayed SIGKILL would never run.
-        for runner in terminating.values {
-            runner.terminateNow()
-        }
+        // One batch: SIGTERM every group, a single ≤0.2 s wait, then SIGKILL the survivors.
+        let processes = (Array(terminating.values) + Array(live.values)).compactMap { $0.processForShutdown() }
+        AgentProcess.terminateNow(processes)
         terminating.removeAll()
-        for (taskID, runner) in live {
-            runner.terminateNow()
+        for (taskID, _) in live {
             if let task = task(with: taskID), task.runState == .running {
                 task.runState = .stopped
                 task.agentActivity = "Interrupted — Bunny quit"

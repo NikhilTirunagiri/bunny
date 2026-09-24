@@ -17,9 +17,11 @@ protocol AgentRunner: AnyObject {
     func send(_ text: String)
     func interrupt()
     func terminate()
-    /// Synchronous kill for app quit (no delayed SIGKILL timer). See `AgentProcess.terminateNow`.
-    func terminateNow()
+    /// Quit path: marks the runner as terminating (its exit is not a failure) and returns its process,
+    /// for one batched synchronous `AgentProcess.terminateNow(_:grace:)` over all runners.
+    func processForShutdown() -> AgentProcess?
 }
+
 
 /// Helpers shared by the runners.
 enum AgentRunnerText {

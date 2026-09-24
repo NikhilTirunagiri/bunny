@@ -151,26 +151,32 @@ final class AgentProcess {
         }
     }
 
-    /// Synchronous variant for app quit, where no timer would ever fire: SIGTERM to the group, a
-    /// bounded wait (`grace`, default 0.2 s) for the leader to exit, then SIGKILL to the group.
-    /// Also cleans up a group whose leader already exited but whose members still hold the pipes.
-    /// Blocks the calling thread for at most `grace`.
+    /// Synchronous variant for app quit, where no timer would ever fire. See `terminateNow(_:grace:)`.
     func terminateNow(grace: TimeInterval = 0.2) {
-        guard started, !didExit else { return }
-        let pid = process.processIdentifier
-        guard pid > 0 else { return }
-        if process.isRunning {
-            Self.signalGroup(pid, SIGTERM)
-            let deadline = Date().addingTimeInterval(grace)
-            while process.isRunning && Date() < deadline {
-                usleep(10_000)
-            }
+        Self.terminateNow([self], grace: grace)
+    }
+
+    /// Quit path for many processes at once: SIGTERM every group first, then ONE bounded wait
+    /// (at most `grace`, default 0.2 s) for the leaders to exit, then SIGKILL every group — so the
+    /// total quit delay stays ~`grace` however many agents run. Blocks the calling thread.
+    /// Also cleans up a group whose leader already exited but whose members still hold the pipes.
+    static func terminateNow(_ processes: [AgentProcess], grace: TimeInterval = 0.2) {
+        let targets = processes.filter { $0.started && !$0.didExit && $0.process.processIdentifier > 0 }
+        for target in targets where target.process.isRunning {
+            signalGroup(target.process.processIdentifier, SIGTERM)
         }
-        if process.isRunning {
-            Self.signalGroup(pid, SIGKILL)
-        } else {
-            // Group only: the leader's own pid may already be reused.
-            kill(-pid, SIGKILL)
+        let deadline = Date().addingTimeInterval(grace)
+        while targets.contains(where: { $0.process.isRunning }) && Date() < deadline {
+            usleep(10_000)
+        }
+        for target in targets {
+            let pid = target.process.processIdentifier
+            if target.process.isRunning {
+                signalGroup(pid, SIGKILL)
+            } else {
+                // Group only: the leader's own pid may already be reused.
+                kill(-pid, SIGKILL)
+            }
         }
     }
 

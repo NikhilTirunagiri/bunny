@@ -200,6 +200,29 @@ struct AgentProcessTests {
         #expect(await waitUntil(timeout: 1) { !isAlive(grandchild) })
     }
 
+    @Test func terminateNowBatchUsesOneShortWait() async throws {
+        var processes: [AgentProcess] = []
+        var pids: [pid_t] = []
+        for index in 0..<3 {
+            let pidFile = temporaryPath("batch-\(index)")
+            defer { try? FileManager.default.removeItem(atPath: pidFile) }
+            // Each leader ignores SIGTERM, so every one of them needs the SIGKILL.
+            let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", "trap '' TERM; echo $$ > '\(pidFile)'; while :; do sleep 1; done"],
+                                       cwd: NSTemporaryDirectory(), environment: env)
+            try process.start()
+            #expect(await waitUntil { readPID(pidFile) != nil })
+            pids.append(try #require(readPID(pidFile)))
+            processes.append(process)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let started = Date()
+        AgentProcess.terminateNow(processes, grace: 0.2)
+        // One shared grace period, not 0.2 s per process.
+        #expect(Date().timeIntervalSince(started) < 0.45)
+        #expect(await waitUntil(timeout: 1) { pids.allSatisfy { !isAlive($0) } })
+    }
+
     @Test func deliversFinalUnterminatedLineAtEOF() async throws {
         let process = AgentProcess(executable: "/bin/sh", arguments: ["-c", #"printf '{"a":1}\n{"last":true}'"#], cwd: NSTemporaryDirectory(), environment: env)
         var lines: [String] = []

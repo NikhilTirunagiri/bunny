@@ -96,10 +96,10 @@ final class ClaudeCodeRunner: AgentRunner {
         process.terminate()
     }
 
-    func terminateNow() {
-        guard let process else { return }
+    func processForShutdown() -> AgentProcess? {
+        guard let process else { return nil }
         terminationRequested = true
-        process.terminateNow()
+        return process
     }
 
     // MARK: - Private

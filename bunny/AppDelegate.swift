@@ -10,10 +10,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         NSApp.setActivationPolicy(.accessory)
         WindowManager.applyAppearance(UserDefaults.standard.string(forKey: "appearance") ?? "system")
 
+        // Dedicated store (never the shared `Application Support/default.store`), seeded once
+        // by copying the old sandboxed build's store; the originals are left as a backup.
+        guard let storeURL = StoreSetup.prepare() else {
+            NSApp.terminate(nil)
+            return
+        }
         do {
-            // Dedicated store (never the shared `Application Support/default.store`), seeded once
-            // by copying the old sandboxed build's store; the originals are left as a backup.
-            let storeURL = try StoreMigration.prepareStore()
             modelContainer = try ModelContainer(for: BunnyTask.self, ShelfItem.self,
                                                 configurations: ModelConfiguration(url: storeURL))
         } catch {
