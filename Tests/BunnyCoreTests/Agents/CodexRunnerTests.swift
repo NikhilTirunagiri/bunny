@@ -100,7 +100,7 @@ struct CodexRunnerTests {
         #expect(recorder.events.turnsFinished.first?.text == "done: Answer: sqlite")
     }
 
-    @Test func codexFailedTurnAndFollowUpInterrupt() async throws {
+    @Test func codexFailedTurnThenFollowUpTurn() async throws {
         let runner = CodexRunner(options: FakeCLI.options(cliPath: FakeCLI.codex))
         let recorder = EventRecorder(runner)
         defer { runner.terminate() }
@@ -115,6 +115,46 @@ struct CodexRunnerTests {
         #expect(await recorder.waitForTurnFinished(count: 2))
         let second = recorder.events.turnsFinished.count > 1 ? recorder.events.turnsFinished[1].text : ""
         #expect(second == "done: again")
+    }
+
+    @Test func codexInterruptEndsRunningTurn() async throws {
+        let runner = CodexRunner(options: FakeCLI.options(cliPath: FakeCLI.codex))
+        let recorder = EventRecorder(runner)
+        defer { runner.terminate() }
+
+        runner.start(brief: makeBrief(title: "SLOW work"), harness: .codex, resumeSessionID: nil, initialMessage: nil)
+        #expect(await recorder.wait { $0.activities.contains("working slowly") })
+
+        let started = Date()
+        runner.interrupt()
+
+        #expect(await recorder.waitForTurnFinished(timeout: 4))
+        let elapsed = Date().timeIntervalSince(started)
+        let finished = try #require(recorder.events.turnsFinished.first)
+        #expect(finished.text == "Interrupted")
+        #expect(!finished.success)
+        #expect(elapsed < 4)
+        #expect(recorder.events.failures.isEmpty)
+    }
+
+    @Test func codexSendDuringRunningTurnIsQueuedUntilItCompletes() async throws {
+        let runner = CodexRunner(options: FakeCLI.options(cliPath: FakeCLI.codex))
+        let recorder = EventRecorder(runner)
+        defer { runner.terminate() }
+
+        runner.start(brief: makeBrief(title: "SLOW work"), harness: .codex, resumeSessionID: nil, initialMessage: nil)
+        #expect(await recorder.wait { $0.activities.contains("working slowly") })
+
+        // The fake rejects overlapping turn/start calls, so these must wait for the running turn.
+        runner.send("next one")
+        runner.send("last one")
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(recorder.events.turnsFinished.isEmpty)
+        runner.interrupt()
+
+        #expect(await recorder.waitForTurnFinished(count: 3))
+        let texts = recorder.events.turnsFinished.map(\.text)
+        #expect(texts == ["Interrupted", "done: next one", "done: last one"])
     }
 
     @Test func codexMissingCLI() async {

@@ -130,15 +130,33 @@ final class AgentProcess {
         }
     }
 
-    /// SIGTERM, then SIGKILL after 3 s if still running.
+    /// SIGTERM to the child's whole process group, then SIGKILL to the group after 3 s if the child is still running.
+    ///
+    /// `Process` makes the child its own process-group leader (pgid == pid), so signalling `-pid` also
+    /// reaches what the agent spawned (tool shells, dev servers, MCP servers, sandboxed commands) —
+    /// unless they moved to their own group or session.
     func terminate() {
         guard started, !didExit, process.isRunning else { return }
-        process.terminate()
+        let pid = process.processIdentifier
+        Self.signalGroup(pid, SIGTERM)
         let process = self.process
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.killGrace) {
             if process.isRunning {
-                kill(process.processIdentifier, SIGKILL)
+                Self.signalGroup(pid, SIGKILL)
+            } else {
+                // The leader obeyed SIGTERM; anything left in its group that ignored it dies now.
+                // Group only: the leader's own pid may already be reused.
+                kill(-pid, SIGKILL)
             }
+        }
+    }
+
+    /// Signals process group `pid`, falling back to the process itself if it isn't a group leader.
+    /// Only call while the leader is known to be alive (so `pid` can't have been reused).
+    private static func signalGroup(_ pid: pid_t, _ signal: Int32) {
+        guard pid > 0 else { return }
+        if kill(-pid, signal) != 0 {
+            kill(pid, signal)
         }
     }
 
@@ -148,6 +166,10 @@ final class AgentProcess {
         guard !didExit else { return }
         if data.isEmpty {
             stdoutClosed = true
+            // Deliver a final line the child wrote without a trailing newline.
+            if let last = lineBuffer.flush() {
+                onLine?(last)
+            }
             finishIfDrained()
             return
         }
@@ -174,7 +196,15 @@ final class AgentProcess {
         terminationStatus = status
         finishIfDrained()
         if !didExit {
+            // Something the child spawned still holds stdout/stderr open. Give it a moment, then
+            // kill what is left of the group (the leader is gone, but the group id stays reserved
+            // while members remain) and report the exit anyway.
+            let pid = process.processIdentifier
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.drainGrace) {
+                if !self.didExit, pid > 0 {
+                    // Group only: the leader's own pid may already be reused.
+                    kill(-pid, SIGKILL)
+                }
                 self.finish()
             }
         }

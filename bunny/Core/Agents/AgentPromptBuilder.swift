@@ -45,7 +45,7 @@ enum AgentPromptBuilder {
         case .claudeCode:
             askSentence = "Claude: use the AskUserQuestion tool."
         case .codex:
-            askSentence = "Codex: end your turn with exactly one <bunny-question>{\"question\": \"...\", \"options\": [\"...\", \"...\"]}</bunny-question> block (options optional; omit for free-text answers) and nothing after it."
+            askSentence = "Codex: end your turn with exactly one <bunny-question>{\"question\": \"...\", \"options\": [\"...\", \"...\"]}</bunny-question> block (options optional; omit for free-text answers) and nothing after it. Only include a <bunny-question> block if you cannot continue without the user's decision. Never add one after finishing the task."
         }
         let bullets = [
             "You were handed this task from Bunny, a menu-bar task list. Work autonomously.",

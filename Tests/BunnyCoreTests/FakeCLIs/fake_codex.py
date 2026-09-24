@@ -10,11 +10,16 @@ Keywords in the turn text pick the scenario:
               with "approval: <decision>" once the client replies
   POLICY   -> agentMessage "policy: <approvalPolicy> sandbox: <sandbox> roots: <writable roots json>"
   BADTURN  -> turn/completed failed with error "kaput"
+  SLOW     -> agentMessage "working slowly", then completes ~5 s later unless turn/interrupt arrives
+              first (which completes it with status "interrupted")
+A turn/start while a SLOW or APPROVE turn is still running gets a JSON-RPC error "turn already running".
   other    -> agentMessage "done: <text>", then turn/completed completed
 """
 import json
 import os
+import select
 import sys
+import time
 
 if sys.argv[1:] != ["app-server", "--stdio"]:
     sys.stderr.write("usage: fake_codex.py app-server --stdio (got %r)\n" % (sys.argv[1:],))
@@ -23,6 +28,7 @@ if sys.argv[1:] != ["app-server", "--stdio"]:
 thread_params = {}
 turn_counter = 0
 pending_approval_turn = None
+slow_turn = None  # (turn_id, deadline) of a SLOW turn still running
 
 
 def out(obj):
@@ -54,7 +60,7 @@ def complete(turn_id, status="completed", error=None):
 
 
 def handle_turn(turn_id, text):
-    global pending_approval_turn
+    global pending_approval_turn, slow_turn
     notify("turn/started", {"threadId": "th-1", "turn": {"id": turn_id, "status": "inProgress", "items": []}})
     if "QUESTION" in text:
         agent_message(turn_id, "Need info\n<bunny-question>{\"question\":\"Which DB?\",\"options\":[\"pg\",\"sqlite\"]}</bunny-question>")
@@ -70,6 +76,9 @@ def handle_turn(turn_id, text):
         agent_message(turn_id, "policy: %s sandbox: %s roots: %s" % (
             thread_params.get("approvalPolicy"), thread_params.get("sandbox"), json.dumps(roots)))
         complete(turn_id)
+    elif "SLOW" in text:
+        agent_message(turn_id, "working slowly")
+        slow_turn = (turn_id, time.monotonic() + 5)
     elif "BADTURN" in text:
         complete(turn_id, status="failed", error="kaput")
     else:
@@ -77,12 +86,33 @@ def handle_turn(turn_id, text):
         complete(turn_id)
 
 
-def main():
-    global thread_params, turn_counter, pending_approval_turn
+def read_lines():
+    """Yields stdin lines; yields None whenever a SLOW turn's deadline passes (select-based, unbuffered)."""
+    global slow_turn
+    pending = b""
     while True:
-        line = sys.stdin.readline()
-        if not line:
+        timeout = None
+        if slow_turn is not None:
+            timeout = max(0, slow_turn[1] - time.monotonic())
+        ready, _, _ = select.select([0], [], [], timeout)
+        if not ready:
+            turn_id = slow_turn[0]
+            slow_turn = None
+            agent_message(turn_id, "done slowly")
+            complete(turn_id)
+            continue
+        chunk = os.read(0, 65536)
+        if not chunk:
             return
+        pending += chunk
+        while b"\n" in pending:
+            line, pending = pending.split(b"\n", 1)
+            yield line.decode("utf-8")
+
+
+def main():
+    global thread_params, turn_counter, pending_approval_turn, slow_turn
+    for line in read_lines():
         line = line.strip()
         if not line:
             continue
@@ -114,6 +144,10 @@ def main():
         elif method == "thread/resume":
             respond(rpc_id, {"thread": {"id": params.get("threadId"), "path": "/tmp/resumed.jsonl"}})
         elif method == "turn/start":
+            if slow_turn is not None or pending_approval_turn is not None:
+                # Like the real server, one turn at a time: clients must wait for turn/completed.
+                out({"jsonrpc": "2.0", "id": rpc_id, "error": {"code": -32000, "message": "turn already running"}})
+                continue
             turn_counter += 1
             turn_id = "turn-%d" % turn_counter
             text = "".join(i.get("text", "") for i in params.get("input", []) if i.get("type") == "text")
@@ -121,6 +155,8 @@ def main():
             handle_turn(turn_id, text)
         elif method == "turn/interrupt":
             respond(rpc_id, {})
+            if slow_turn is not None and slow_turn[0] == params.get("turnId"):
+                slow_turn = None
             complete(params.get("turnId"), status="interrupted")
         else:
             out({"jsonrpc": "2.0", "id": rpc_id, "error": {"code": -32601, "message": "unknown method " + method}})

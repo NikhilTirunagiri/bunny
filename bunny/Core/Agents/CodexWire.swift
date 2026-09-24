@@ -7,7 +7,7 @@ enum CodexWire {
         case agentMessageDelta(String)
         case agentMessage(String)
         case commandStarted(String)
-        case turnCompleted(status: String, error: String?)
+        case turnCompleted(turnID: String?, status: String, error: String?)
         case approvalRequest(rpcID: String, method: String, title: String, detail: String)
         case unsupportedRequest(rpcID: String)
         case ignored
@@ -55,7 +55,7 @@ enum CodexWire {
                     return requestFallback(object)
                 }
                 let error = (turn["error"] as? [String: Any])?["message"] as? String
-                return .turnCompleted(status: status, error: error)
+                return .turnCompleted(turnID: turn["id"] as? String, status: status, error: error)
 
             case "item/commandExecution/requestApproval":
                 guard let rpcID = rpcIDString(object["id"]) else { return .ignored }

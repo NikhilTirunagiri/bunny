@@ -29,4 +29,22 @@ struct JSONLineBufferTests {
         #expect(first.map { String(decoding: $0, as: UTF8.self) } == ["alpha"])
         #expect(second.map { String(decoding: $0, as: UTF8.self) } == ["partial"])
     }
+
+    @Test func flushReturnsUnterminatedTrailingLineOnce() {
+        var buffer = JSONLineBuffer()
+
+        let lines = buffer.append(Data("done\n{\"last\":true}\r".utf8))
+        let flushed = buffer.flush().map { String(decoding: $0, as: UTF8.self) }
+        let second = buffer.flush()
+
+        #expect(lines.map { String(decoding: $0, as: UTF8.self) } == ["done"])
+        #expect(flushed == "{\"last\":true}")
+        #expect(second == nil)
+    }
+
+    @Test func flushOfEmptyBufferIsNil() {
+        var buffer = JSONLineBuffer()
+        _ = buffer.append(Data("complete\n".utf8))
+        #expect(buffer.flush() == nil)
+    }
 }
