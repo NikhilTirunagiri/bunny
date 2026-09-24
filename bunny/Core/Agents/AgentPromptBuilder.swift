@@ -39,7 +39,10 @@ enum AgentPromptBuilder {
         return sections.joined(separator: "\n\n")
     }
 
-    static func systemAppendix(for harness: AgentHarness) -> String {
+    static let bunnyToolsSentence = "You can read and manage the user's Bunny task list with the `bunny` tools (list_tasks, create_task, create_tasks, update_task, complete_task, add_to_shelf). Use them when the user asks you to add or organize tasks."
+
+    /// `toolsAvailable`: the run has Bunny's MCP server attached, so mention the `bunny` tools.
+    static func systemAppendix(for harness: AgentHarness, toolsAvailable: Bool = false) -> String {
         let askSentence: String
         switch harness {
         case .claudeCode:
@@ -47,11 +50,14 @@ enum AgentPromptBuilder {
         case .codex:
             askSentence = "Codex: end your turn with exactly one <bunny-question>{\"question\": \"...\", \"options\": [\"...\", \"...\"]}</bunny-question> block (options optional; omit for free-text answers) and nothing after it. Only include a <bunny-question> block if you cannot continue without the user's decision. Never add one after finishing the task."
         }
-        let bullets = [
+        var bullets = [
             "You were handed this task from Bunny, a menu-bar task list. Work autonomously.",
             "Only ask the user when genuinely blocked or when a decision is theirs. \(askSentence)",
             "When you finish, reply with a short summary of what you did. If you completed specific subtasks, add a final line <bunny-subtasks-done>1,3</bunny-subtasks-done> with their numbers.",
         ]
+        if toolsAvailable {
+            bullets.append(bunnyToolsSentence)
+        }
         return bullets.map { "- \($0)" }.joined(separator: "\n")
     }
 }
