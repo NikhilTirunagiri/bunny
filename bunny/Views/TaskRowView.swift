@@ -10,10 +10,20 @@ struct TaskRowView: View {
     @Bindable var task: BunnyTask
     let hasSubtasks: Bool
 
+    @Query private var shelfItems: [ShelfItem]
+
     @State private var showTimerPicker = false
     @State private var isEditing = false
     @State private var editTitle = ""
+    @State private var isFileTargeted = false
     @FocusState private var titleFocused: Bool
+
+    init(task: BunnyTask, hasSubtasks: Bool) {
+        self.task = task
+        self.hasSubtasks = hasSubtasks
+        let id = task.id
+        _shelfItems = Query(filter: #Predicate<ShelfItem> { $0.taskID == id })
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -51,13 +61,25 @@ struct TaskRowView: View {
                         if !focused { commitEdit() }
                     }
             } else {
-                Text(task.title)
-                    .font(.system(size: 14))
-                    .foregroundStyle(task.isCompleted ? .secondary : .primary)
-                    .strikethrough(task.isCompleted, color: .secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(1)
-                    .highPriorityGesture(TapGesture(count: 2).onEnded { startEditing() })
+                HStack(spacing: 4) {
+                    Text(task.title)
+                        .font(.system(size: 14))
+                        .foregroundStyle(task.isCompleted ? .secondary : .primary)
+                        .strikethrough(task.isCompleted, color: .secondary)
+                        .lineLimit(1)
+                        .highPriorityGesture(TapGesture(count: 2).onEnded { startEditing() })
+                    if !task.taskDescription.isEmpty {
+                        Image(systemName: "text.alignleft").font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+                    if !shelfItems.isEmpty {
+                        HStack(spacing: 1) {
+                            Image(systemName: "paperclip")
+                            Text("\(shelfItems.count)")
+                        }
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             // Right-side actions
@@ -98,6 +120,13 @@ struct TaskRowView: View {
         .contentShape(Rectangle())
         .onHover { inside in inside ? coordinator.rowEntered(task.id) : coordinator.rowExited(task.id) }
         .onTapGesture { coordinator.rowClicked(task.id) }
+        .dropDestination(for: URL.self) { urls, _ in
+            ShelfService.add(urls, to: task.id, in: modelContext) > 0
+        } isTargeted: { targeted in
+            isFileTargeted = targeted
+            if targeted { coordinator.fileDragEntered(task.id) }
+        }
+        .background(isFileTargeted ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 8))
         .onAppear {
             if appState.editingTaskID == task.id {
                 appState.editingTaskID = nil
