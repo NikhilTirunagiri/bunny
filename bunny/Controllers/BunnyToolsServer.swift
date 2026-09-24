@@ -1,11 +1,14 @@
 import Foundation
 import Network
+import Observation
 import os
 
 /// Bunny's local MCP server ("Bunny tools", spec §5): `POST http://127.0.0.1:<port>/mcp`, bearer-token
 /// auth, one request per connection. Bound to loopback only. All Network callbacks run on the main
 /// queue, so parsing, `MCPServerCore.handle` and the SwiftData backend all run on the main actor.
+/// Observable, so Settings shows the bound port as it changes.
 @MainActor
+@Observable
 final class BunnyToolsServer {
     static let shared = BunnyToolsServer()
     private init() {}
@@ -14,17 +17,20 @@ final class BunnyToolsServer {
     private(set) var port: Int?
 
     /// Executes tool calls. Must be set before `start()`.
-    var backend: BunnyToolsBackend?
+    @ObservationIgnored var backend: BunnyToolsBackend?
 
-    private var listener: NWListener?
-    private var core: MCPServerCore?
-    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    @ObservationIgnored private var listener: NWListener?
+    @ObservationIgnored private var core: MCPServerCore?
+    @ObservationIgnored private var connections: [ObjectIdentifier: NWConnection] = [:]
     /// Bumped on every start/stop, so callbacks from a replaced listener are ignored.
-    private var generation = 0
+    @ObservationIgnored private var generation = 0
+    /// One delayed retry after both the fixed and the fallback port failed; `restart()` re-arms it.
+    @ObservationIgnored private var didRetry = false
 
     private static let log = Logger(subsystem: "bunny", category: "BunnyTools")
     private static let maxConnections = 32
     private static let connectionTimeout: TimeInterval = 30
+    private static let retryDelay: TimeInterval = 5
 
     var isRunning: Bool { port != nil }
 
@@ -48,9 +54,10 @@ final class BunnyToolsServer {
         connections.removeAll()
     }
 
-    /// Restarts on the current settings (e.g. after the port setting changed).
+    /// Restarts on the current settings (e.g. after the token was regenerated).
     func restart() {
         stop()
+        didRetry = false
         start()
     }
 
@@ -64,15 +71,15 @@ final class BunnyToolsServer {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: nwPort)
         parameters.acceptLocalOnly = true
+        // A restart rebinds the port right after the old listener closed.
+        parameters.allowLocalEndpointReuse = true
 
         let listener: NWListener
         do {
             listener = try NWListener(using: parameters)
         } catch {
             Self.log.error("Bunny tools: couldn't create listener on port \(requestedPort): \(error.localizedDescription, privacy: .public)")
-            if allowFallback && requestedPort != 0 {
-                listen(on: 0, allowFallback: false)
-            }
+            listenFailed(requestedPort: requestedPort, allowFallback: allowFallback)
             return
         }
         self.listener = listener
@@ -108,11 +115,30 @@ final class BunnyToolsServer {
             self.listener = nil
             port = nil
             Self.log.error("Bunny tools: port \(requestedPort) unavailable: \(error.localizedDescription, privacy: .public)")
-            if allowFallback && requestedPort != 0 {
-                listen(on: 0, allowFallback: false)
-            }
+            listenFailed(requestedPort: requestedPort, allowFallback: allowFallback)
         default:
             break
+        }
+    }
+
+    /// The fixed port failed → try a free port. The free port failed too → start over once, after 5 s.
+    private func listenFailed(requestedPort: Int, allowFallback: Bool) {
+        if allowFallback && requestedPort != 0 {
+            listen(on: 0, allowFallback: false)
+            return
+        }
+        guard !didRetry else {
+            Self.log.error("Bunny tools: not running (the retry failed too)")
+            return
+        }
+        didRetry = true
+        let current = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelay) { [weak self] in
+            MainActor.assumeIsolated {
+                // Skip when stopped or restarted meanwhile.
+                guard let self, self.generation == current, self.listener == nil else { return }
+                self.start()
+            }
         }
     }
 
@@ -128,7 +154,11 @@ final class BunnyToolsServer {
         connection.stateUpdateHandler = { [weak self] state in
             MainActor.assumeIsolated {
                 switch state {
-                case .failed, .cancelled:
+                case .failed:
+                    // A failed connection still holds its resources until cancelled.
+                    self?.connections[key] = nil
+                    connection.cancel()
+                case .cancelled:
                     self?.connections[key] = nil
                 default:
                     break
