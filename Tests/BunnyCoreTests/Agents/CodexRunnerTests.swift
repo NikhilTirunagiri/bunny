@@ -190,6 +190,20 @@ struct CodexRunnerTests {
         }
     }
 
+    @Test func codexRejectsBunnyElicitationWithoutTools() async throws {
+        for autonomy in [AgentAutonomy.autonomous, .askFirst] {
+            let runner = CodexRunner(options: FakeCLI.options(cliPath: FakeCLI.codex, autonomy: autonomy))
+            let recorder = EventRecorder(runner)
+            defer { runner.terminate() }
+
+            runner.start(brief: makeBrief(title: "ELICIT now"), harness: .codex, resumeSessionID: nil, initialMessage: nil)
+
+            #expect(await recorder.waitForTurnFinished())
+            #expect(recorder.events.turnsFinished.first?.text == "elicitation error: -32601")
+            #expect(recorder.events.questions.isEmpty)
+        }
+    }
+
     @Test func codexResumeUsesThreadResumeAndInitialMessage() async throws {
         let runner = CodexRunner(options: FakeCLI.options(cliPath: FakeCLI.codex))
         let recorder = EventRecorder(runner)

@@ -254,9 +254,10 @@ to tool annotations. `"approve"` does.
   ```
   It is merged with `sandbox_workspace_write.writable_roots` when there are extra directories, and
   re-sent on `thread/resume` together with the model, because a new app-server process does not have it.
-- **Defense in depth.** Any `mcpServer/elicitation/request` whose `serverName` is `"bunny"` is
-  auto-accepted with the reply above, in either autonomy mode, the same way Claude gets
-  `--allowedTools mcp__bunny`. Elicitations from other servers still get the existing
+- **Defense in depth.** An `mcpServer/elicitation/request` whose `serverName` is `"bunny"` is
+  auto-accepted with the reply above, in either autonomy mode, but only when the run has Bunny
+  tools configured (`options.tools != nil`). This matches Claude's `--allowedTools mcp__bunny`.
+  All other elicitations, including a "bunny" server the run did not attach, get the existing
   method-not-found reply. Command and file approvals keep the existing flow: they surface as
   questions under `.askFirst`, and `"never"` never asks.
 - The gated live test `liveCodexCreatesTaskWithBunnyTools` (`BUNNY_LIVE_AGENT_TESTS=1`) runs the real

@@ -71,8 +71,13 @@ final class ClaudeCodeRunner: AgentRunner {
                 ],
             ],
         ]
-        let data = (try? JSONSerialization.data(withJSONObject: config, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
-        return String(decoding: data, as: UTF8.self)
+        // Only strings in dictionaries: serialization cannot fail, so never emit an empty `--mcp-config`.
+        do {
+            let data = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys, .withoutEscapingSlashes])
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            preconditionFailure("MCP config is not valid JSON: \(error)")
+        }
     }
 
     func start(brief: AgentBrief, harness: AgentHarness, resumeSessionID: String?, initialMessage: String?) {
