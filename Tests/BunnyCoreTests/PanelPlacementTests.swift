@@ -16,7 +16,7 @@ struct PanelPlacementTests {
         let popover = CGRect(x: 100, y: 395, width: 340, height: 480)
         let r = PanelPlacement.frame(popover: popover, visible: visible)
         #expect(r.side == .right)
-        #expect(r.frame.minX == 440 + 8)
+        #expect(r.frame.minX == 448)
     }
 
     @Test func clampsInsideVisibleWhenNeitherFits() {
@@ -33,6 +33,6 @@ struct PanelPlacementTests {
         let popover = CGRect(x: -500, y: 575, width: 340, height: 480)
         let r = PanelPlacement.frame(popover: popover, visible: screen2)
         #expect(r.side == .left)
-        #expect(r.frame.minX == -500 - 308)
+        #expect(r.frame.minX == -808)
     }
 }
