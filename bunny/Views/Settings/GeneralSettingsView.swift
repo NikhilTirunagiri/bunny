@@ -2,7 +2,7 @@ import SwiftUI
 import ServiceManagement
 import AppKit
 
-struct SettingsView: View {
+struct GeneralSettingsView: View {
     @AppStorage("appearance") private var appearance = "system"
     @State private var launchAtLogin = false
 
@@ -42,43 +42,22 @@ struct SettingsView: View {
                     .labelsHidden()
                 }
 
-                Section("About") {
-                    HStack(alignment: .center, spacing: 8) {
-                        Image(nsImage: NSApp.applicationIconImage)
-                            .resizable()
-                            .frame(width: 72, height: 72)
-                        if let url = URL(string: "https://www.nikhilt.dev") {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Version 0.9.0")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                HStack(spacing: 0) {
-                                    Text("Made with ❤️ ")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-
-                                    Link("Nikhil Tirunagiri", destination: url)
-                                        .font(.caption)
-                                }
-                            }
-                        }
+                Section {
+                    Button("Show Welcome Guide…") {
+                        WindowManager.shared.showOnboarding()
                     }
                 }
             }
             .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
 
-            Button(role: .destructive) {
+            Button("Quit Bunny", role: .destructive) {
                 NSApp.terminate(nil)
-            } label: {
-                Text("Quit Bunny")
-                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.glass)
             .tint(.red)
-            .padding(12)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
         }
-        .frame(minHeight: 360)
         .onAppear {
             launchAtLogin = SMAppService.mainApp.status == .enabled
         }

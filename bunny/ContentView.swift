@@ -14,7 +14,7 @@ struct ContentView: View {
 
     @AppStorage("appearance") private var appearance = "system"
 
-    private enum ActiveView { case tasks, archive, settings }
+    private enum ActiveView { case tasks, archive }
 
     private var colorScheme: ColorScheme {
         switch appearance {
@@ -59,7 +59,6 @@ struct ContentView: View {
             switch activeView {
             case .tasks:    taskListView
             case .archive:  ArchiveView()
-            case .settings: SettingsView()
             }
 
             bottomBar
@@ -138,17 +137,17 @@ struct ContentView: View {
                 Spacer()
 
                 Button {
-                    activeView = activeView == .settings ? .tasks : .settings
+                    WindowManager.shared.showSettings()
                 } label: {
                     Image(systemName: "gearshape")
                         .font(.system(size: 14))
-                        .foregroundStyle(activeView == .settings ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
                 .controlSize(.large)
                 .padding(.trailing, 14)
-                .help(activeView == .settings ? "Back to tasks" : "Settings")
+                .help("Settings")
             }
         }
         .frame(height: 44)
