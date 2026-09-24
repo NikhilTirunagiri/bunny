@@ -5,6 +5,7 @@ struct TaskRowView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AppState.self) private var appState
     @Environment(TimerManager.self) private var timerManager
+    @Environment(PanelCoordinator.self) private var coordinator
 
     @Bindable var task: BunnyTask
     let hasSubtasks: Bool
@@ -56,7 +57,7 @@ struct TaskRowView: View {
                     .strikethrough(task.isCompleted, color: .secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .lineLimit(1)
-                    .onTapGesture(count: 2) { startEditing() }
+                    .highPriorityGesture(TapGesture(count: 2).onEnded { startEditing() })
             }
 
             // Right-side actions
@@ -95,6 +96,8 @@ struct TaskRowView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .contentShape(Rectangle())
+        .onHover { inside in inside ? coordinator.rowEntered(task.id) : coordinator.rowExited(task.id) }
+        .onTapGesture { coordinator.rowClicked(task.id) }
         .onAppear {
             if appState.editingTaskID == task.id {
                 appState.editingTaskID = nil

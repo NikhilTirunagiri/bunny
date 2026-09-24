@@ -3,11 +3,15 @@ import SwiftUI
 import SwiftData
 import UserNotifications
 
-final class StatusBarController: NSObject {
+@MainActor
+final class StatusBarController: NSObject, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private(set) var popover: NSPopover!
     private var updateTimer: Timer?
     private var modelContext: ModelContext?
+    private var panelController: TaskPanelController!
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
 
     private static let monoFont = NSFont.monospacedDigitSystemFont(
         ofSize: NSFont.systemFontSize,
@@ -35,13 +39,19 @@ final class StatusBarController: NSObject {
 
         popover = NSPopover()
         popover.contentSize = NSSize(width: 340, height: 480)
-        popover.behavior = .transient
+        // Closed explicitly (global click monitor, Esc, status item) so clicks in the side panel don't dismiss it.
+        popover.behavior = .applicationDefined
+        popover.delegate = self
         popover.contentViewController = NSHostingController(
             rootView: ContentView()
                 .modelContainer(modelContainer)
                 .environment(AppState.shared)
                 .environment(TimerManager.shared)
+                .environment(PanelCoordinator.shared)
         )
+
+        panelController = TaskPanelController(modelContainer: modelContainer)
+        PanelCoordinator.shared.onClosePopover = { [weak self] in self?.closePopover() }
 
         restorePinnedTask()
         startUpdateTimer()
@@ -65,13 +75,59 @@ final class StatusBarController: NSObject {
     }
 
     @objc func togglePopover() {
-        if popover.isShown {
-            popover.performClose(nil)
-        } else {
-            guard let button = statusItem.button else { return }
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+        popover.isShown ? closePopover() : openPopover()
+    }
+
+    func openPopover() {
+        guard !popover.isShown, let button = statusItem.button else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        if let window = popover.contentViewController?.view.window {
+            window.makeKey()
+            panelController.attach(to: window)
         }
+        installMonitors()
+    }
+
+    func closePopover() {
+        guard popover.isShown else { return }
+        popover.performClose(nil)
+    }
+
+    // MARK: - NSPopoverDelegate
+
+    func popoverDidClose(_ notification: Notification) {
+        removeMonitors()
+        PanelCoordinator.shared.popoverClosed()
+        panelController.hide()
+    }
+
+    // MARK: - Event monitors
+
+    private func installMonitors() {
+        removeMonitors()
+        // Clicks in other apps close the popover (mouse-down global monitors need no Accessibility permission).
+        // Clicks on our own status item are delivered to this app, so the global monitor doesn't see them.
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.closePopover()
+            }
+        }
+        // Esc: unlock the panel, then close. Leave Esc alone while a text field is being edited.
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            let consumed = MainActor.assumeIsolated { () -> Bool in
+                guard event.keyCode == 53 else { return false }
+                if event.window?.firstResponder is NSTextView { return false }
+                PanelCoordinator.shared.escape()
+                return true
+            }
+            return consumed ? nil : event
+        }
+    }
+
+    private func removeMonitors() {
+        if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
+        if let m = localMonitor { NSEvent.removeMonitor(m); localMonitor = nil }
     }
 
     func updateMenuBarItem() {
