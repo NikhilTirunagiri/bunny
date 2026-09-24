@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct TaskRowView: View {
     @Environment(\.modelContext) private var modelContext
@@ -17,6 +18,8 @@ struct TaskRowView: View {
     @State private var editTitle = ""
     @State private var isFileTargeted = false
     @State private var isHovered = false
+    @State private var dropIndicator: DropZone? = nil
+    @State private var rowHeight: CGFloat = 0
     @FocusState private var titleFocused: Bool
 
     init(task: BunnyTask, hasSubtasks: Bool) {
@@ -129,12 +132,23 @@ struct TaskRowView: View {
             inside ? coordinator.rowEntered(task.id) : coordinator.rowExited(task.id)
         }
         .onTapGesture { coordinator.rowClicked(task.id) }
-        .dropDestination(for: URL.self) { urls, _ in
-            ShelfService.add(urls, to: task.id, in: modelContext) > 0
-        } isTargeted: { targeted in
-            isFileTargeted = targeted
-            if targeted { coordinator.fileDragEntered(task.id) }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeight = $0 }
+        .onDrag {
+            TaskDrag.currentID = task.id
+            return NSItemProvider(object: task.id.uuidString as NSString)
+        } preview: {
+            dragPreview
         }
+        // One drop target per row (spec §4): files → shelf, tasks → reorder / nest.
+        .onDrop(of: [.fileURL, .utf8PlainText], delegate: RowDropDelegate(
+            taskID: task.id,
+            rowHeight: rowHeight,
+            context: modelContext,
+            coordinator: coordinator,
+            indicator: $dropIndicator,
+            isFileTargeted: $isFileTargeted
+        ))
+        .overlay { dropIndicatorView }
         .background {
             ConcentricRectangle()
                 .fill(
@@ -151,6 +165,64 @@ struct TaskRowView: View {
                 startEditing()
             }
         }
+    }
+
+    // MARK: - Drag & drop
+
+    /// Insertion line above/below the row, or an accent outline + indent arrow for "into".
+    @ViewBuilder
+    private var dropIndicatorView: some View {
+        switch dropIndicator {
+        case .above:
+            VStack {
+                Capsule().fill(Color.accentColor).frame(height: 2).offset(y: -1)
+                Spacer(minLength: 0)
+            }
+            .allowsHitTesting(false)
+        case .below:
+            VStack {
+                Spacer(minLength: 0)
+                Capsule().fill(Color.accentColor).frame(height: 2).offset(y: 1)
+            }
+            .allowsHitTesting(false)
+        case .into:
+            ZStack(alignment: .leading) {
+                ConcentricRectangle()
+                    .fill(Color.accentColor.opacity(0.08))
+                ConcentricRectangle()
+                    .stroke(Color.accentColor, lineWidth: 1.5)
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.leading, 2)
+            }
+            .allowsHitTesting(false)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    /// Compact card shown under the pointer while dragging a row.
+    private var dragPreview: some View {
+        HStack(spacing: 6) {
+            Image(systemName: checkboxSymbol)
+                .font(.system(size: 14))
+                .foregroundStyle(checkboxColor)
+            Text(task.title.isEmpty ? "Untitled" : task.title)
+                .font(.system(size: 13))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if hasSubtasks {
+                Image(systemName: "list.bullet.indent")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(width: 240, alignment: .leading)
+        .background(Color(nsColor: .windowBackgroundColor), in: .rect(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.separator))
     }
 
     @ViewBuilder
