@@ -4,13 +4,21 @@ import UniformTypeIdentifiers
 
 /// The task currently being dragged from a row, recorded when the drag starts so drop
 /// targets can preview the effective zone (the payload itself is only readable on drop).
-/// Plain-text drops are only accepted while it is set, so text dragged in from other apps
-/// is refused. Cleared on drop and when the row's drag session ends; a stale ID left by a
-/// cancelled drag is replaced by the next drag and resolves to a no-op if its task is gone.
+/// Plain-text drops are only accepted while it is set to a live task, so text dragged in from
+/// other apps is refused. It is cleared on drop only: `.onDrag` reports no end of a cancelled
+/// drag, and `dropExited` also fires when the pointer just moves on to the next row. So a
+/// cancelled drag leaves a stale ID until the next drag replaces it; `validateDrop` refuses it
+/// once its task is archived or deleted, and a drop always moves the task named by the payload.
 @MainActor
 enum TaskDrag {
     static var currentID: UUID?
     fileprivate static var hint: (dragged: UUID, target: UUID, zone: DropZone, effective: DropZone?)?
+
+    /// The task exists and isn't archived.
+    fileprivate static func isLive(_ id: UUID, in context: ModelContext) -> Bool {
+        let descriptor = FetchDescriptor<BunnyTask>(predicate: #Predicate { $0.id == id && $0.archivedAt == nil })
+        return ((try? context.fetchCount(descriptor)) ?? 0) > 0
+    }
 }
 
 /// The single drop target on every task row (spec §4): Finder files go to the task's
@@ -30,7 +38,9 @@ struct RowDropDelegate: DropDelegate {
     }
 
     func validateDrop(info: DropInfo) -> Bool {
-        isFileDrag(info) || (TaskDrag.currentID != nil && info.hasItemsConforming(to: [.utf8PlainText]))
+        if isFileDrag(info) { return true }
+        guard let dragged = TaskDrag.currentID, info.hasItemsConforming(to: [.utf8PlainText]) else { return false }
+        return TaskDrag.isLive(dragged, in: context)
     }
 
     func dropEntered(info: DropInfo) {

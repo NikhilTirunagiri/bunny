@@ -260,4 +260,46 @@ struct TaskMoveRulesTests {
         #expect(TaskMoveRules.resolve(dragged: a, target: b, zone: .below, nodes: nodes) == .below)
         #expect(TaskMoveRules.resolve(dragged: a, target: b, zone: .above, nodes: nodes) == .above)
     }
+
+    // MARK: - canNest = false subtask: reorders within its current parent only
+
+    @Test func cannotNestSubtaskReordersWithinItsParent() {
+        let p = UUID(), s1 = UUID(), s2 = UUID(), s3 = UUID()
+        let nodes = [
+            TaskNode(id: p, parentID: nil, sortOrder: 0),
+            TaskNode(id: s1, parentID: p, sortOrder: 0, canNest: false),
+            TaskNode(id: s2, parentID: p, sortOrder: 1),
+            TaskNode(id: s3, parentID: p, sortOrder: 2),
+        ]
+        #expect(TaskMoveRules.resolve(dragged: s1, target: s3, zone: .below, nodes: nodes) == .below)
+        #expect(TaskMoveRules.resolve(dragged: s1, target: s2, zone: .above, nodes: nodes) == .above)
+        // Into a subtask means "below it" within the same parent.
+        #expect(TaskMoveRules.resolve(dragged: s1, target: s2, zone: .into, nodes: nodes) == .below)
+        // Into its own parent appends it as the parent's last subtask.
+        #expect(TaskMoveRules.resolve(dragged: s1, target: p, zone: .into, nodes: nodes) == .into)
+
+        // [s2, s3, s1], still under p.
+        let placements = TaskMoveRules.move(dragged: s1, target: s3, zone: .below, nodes: nodes)
+        let byID = Dictionary(uniqueKeysWithValues: placements.map { ($0.id, $0) })
+        #expect(byID[s1] == TaskPlacement(id: s1, parentID: p, sortOrder: 2))
+        #expect(byID[s2] == TaskPlacement(id: s2, parentID: p, sortOrder: 0))
+        #expect(byID[s3] == TaskPlacement(id: s3, parentID: p, sortOrder: 1))
+    }
+
+    @Test func cannotNestSubtaskCantMoveToAnotherParent() {
+        let p = UUID(), s1 = UUID(), q = UUID(), q1 = UUID()
+        let nodes = [
+            TaskNode(id: p, parentID: nil, sortOrder: 0),
+            TaskNode(id: s1, parentID: p, sortOrder: 0, canNest: false),
+            TaskNode(id: q, parentID: nil, sortOrder: 1),
+            TaskNode(id: q1, parentID: q, sortOrder: 0),
+        ]
+        #expect(TaskMoveRules.resolve(dragged: s1, target: q1, zone: .above, nodes: nodes) == nil)
+        #expect(TaskMoveRules.resolve(dragged: s1, target: q1, zone: .below, nodes: nodes) == nil)
+        #expect(TaskMoveRules.move(dragged: s1, target: q1, zone: .below, nodes: nodes) == [])
+        // Into another top-level task degrades to below it: s1 becomes top-level.
+        #expect(TaskMoveRules.resolve(dragged: s1, target: q, zone: .into, nodes: nodes) == .below)
+        // Above/below a top-level task un-nests it.
+        #expect(TaskMoveRules.resolve(dragged: s1, target: q, zone: .above, nodes: nodes) == .above)
+    }
 }

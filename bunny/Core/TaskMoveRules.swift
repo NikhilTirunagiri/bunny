@@ -7,9 +7,10 @@ struct TaskNode: Equatable {
     let id: UUID
     var parentID: UUID?
     var sortOrder: Int
-    /// False when this task must stay top-level: it has subtasks (incl. archived ones),
-    /// an active agent run, or a timer. The rules also refuse nesting a task that has
-    /// subtasks among `nodes`, whatever this flag says.
+    /// False when this task must not move under a (new) parent: it has subtasks (incl.
+    /// archived ones), a timer, or an agent run or session. It can still move to the top
+    /// level or reorder within its current parent. The rules also refuse nesting a task that
+    /// has subtasks among `nodes`, whatever this flag says.
     var canNest: Bool = true
 }
 
@@ -48,13 +49,16 @@ enum TaskMoveRules {
         let targetIsTopLevel = targetNode.parentID == nil
 
         // Only one nesting level, and agent/timer tasks stay top-level: a task that can't
-        // nest may only land where its parent would be nil.
+        // nest may only land at the top level, or reorder within its current parent.
         if !draggedCanNest {
-            let destinationParent = zone == .into ? target : targetNode.parentID
-            if destinationParent != nil {
-                return (zone == .into && targetIsTopLevel) ? .below : nil
+            // Into a subtask means below it (one nesting level), as for any task.
+            let effectiveZone: DropZone = (zone == .into && !targetIsTopLevel) ? .below : zone
+            let destinationParent = effectiveZone == .into ? target : targetNode.parentID
+            if destinationParent == nil || destinationParent == draggedNode.parentID {
+                return effectiveZone
             }
-            return zone
+            // Into another top-level task degrades to below it, which keeps the task top-level.
+            return effectiveZone == .into ? .below : nil
         }
 
         switch zone {

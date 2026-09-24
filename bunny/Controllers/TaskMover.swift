@@ -15,13 +15,15 @@ enum TaskMover {
     }
 
     /// Tree nodes for the active tasks. A task can't nest when it has subtasks — counted over
-    /// all tasks, archived included, so restoring them can't create grandchildren — or while
-    /// an agent is running on it or it has a timer.
+    /// all tasks, archived included, so restoring them can't create grandchildren — or when it
+    /// has a timer or any agent state (a run, or a finished session: subtasks have no agent
+    /// button, so nesting would hide the session).
     private static func nodes(for tasks: [BunnyTask], in context: ModelContext) -> [TaskNode] {
         let allParentIDs = Set(((try? context.fetch(FetchDescriptor<BunnyTask>())) ?? []).compactMap(\.parentID))
         return tasks.map { task in
             TaskNode(id: task.id, parentID: task.parentID, sortOrder: task.sortOrder,
-                     canNest: !allParentIDs.contains(task.id) && !task.runState.isActive && !task.hasTimer)
+                     canNest: !allParentIDs.contains(task.id) && !task.hasTimer
+                        && task.runState == .idle && task.agentSessionID == nil)
         }
     }
 
