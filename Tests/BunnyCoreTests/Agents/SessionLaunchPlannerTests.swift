@@ -51,8 +51,8 @@ struct SessionLaunchPlannerTests {
         #expect(result == expected)
     }
 
-    @Test("resumeCommand: cwd with space and quote")
-    func resumeCommand_cwdWithSpaceAndQuote() {
+    @Test("resumeCommand: claudeCode with cwd with space and quote")
+    func resumeCommand_claudeCodeCwdWithSpaceAndQuote() {
         let result = SessionLaunchPlanner.resumeCommand(
             harness: .claudeCode,
             cliPath: "/usr/bin/claude",
@@ -60,6 +60,18 @@ struct SessionLaunchPlannerTests {
             cwd: "/tmp/my project's folder"
         )
         let expected = "cd '/tmp/my project'\\''s folder' && exec '/usr/bin/claude' --resume 'session-1'"
+        #expect(result == expected)
+    }
+
+    @Test("resumeCommand: codex with cwd with space and quote")
+    func resumeCommand_codexCwdWithSpaceAndQuote() {
+        let result = SessionLaunchPlanner.resumeCommand(
+            harness: .codex,
+            cliPath: "/usr/bin/codex",
+            sessionID: "session-1",
+            cwd: "/tmp/my project's folder"
+        )
+        let expected = "cd '/tmp/my project'\\''s folder' && exec '/usr/bin/codex' resume 'session-1'"
         #expect(result == expected)
     }
 
@@ -151,8 +163,26 @@ struct SessionLaunchPlannerTests {
             cwd: "/tmp/project"
         )
 
-        let encodedID = "abc123".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
-        let urlString = "vscode://anthropic.claude-code/open?session=\(encodedID)"
+        let urlString = "vscode://anthropic.claude-code/open?session=abc123"
+        let expected: [LaunchStep] = [
+            .exec(executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code", arguments: ["/tmp/project"]),
+            .openURL(urlString, delay: 1.0)
+        ]
+
+        #expect(result == expected)
+    }
+
+    @Test("plan: vscode + claudeCode with special characters in session id")
+    func plan_vscode_claudeCodeSpecialChars() {
+        let result = SessionLaunchPlanner.plan(
+            app: .vscode,
+            harness: .claudeCode,
+            cliPath: "/usr/local/bin/claude",
+            sessionID: "a&b=c d/e?f",
+            cwd: "/tmp/project"
+        )
+
+        let urlString = "vscode://anthropic.claude-code/open?session=a%26b%3Dc%20d%2Fe%3Ff"
         let expected: [LaunchStep] = [
             .exec(executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code", arguments: ["/tmp/project"]),
             .openURL(urlString, delay: 1.0)
@@ -171,13 +201,7 @@ struct SessionLaunchPlannerTests {
             cwd: "/home/user/work"
         )
 
-        let command = SessionLaunchPlanner.resumeCommand(
-            harness: .codex,
-            cliPath: "/usr/local/bin/codex",
-            sessionID: "xyz789",
-            cwd: "/home/user/work"
-        )
-        let script = "#!/bin/zsh -l\n\(command)\n"
+        let script = "#!/bin/zsh -l\ncd '/home/user/work' && exec '/usr/local/bin/codex' resume 'xyz789'\n"
         let expected: [LaunchStep] = [
             .exec(executable: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code", arguments: ["/home/user/work"]),
             .runCommandFile(script: script)
@@ -196,8 +220,7 @@ struct SessionLaunchPlannerTests {
             cwd: "/tmp/project"
         )
 
-        let encodedID = "abc123".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
-        let urlString = "cursor://anthropic.claude-code/open?session=\(encodedID)"
+        let urlString = "cursor://anthropic.claude-code/open?session=abc123"
         let expected: [LaunchStep] = [
             .exec(executable: "/Applications/Cursor.app/Contents/Resources/app/bin/cursor", arguments: ["/tmp/project"]),
             .openURL(urlString, delay: 1.0)
@@ -216,13 +239,7 @@ struct SessionLaunchPlannerTests {
             cwd: "/home/user/work"
         )
 
-        let command = SessionLaunchPlanner.resumeCommand(
-            harness: .codex,
-            cliPath: "/usr/local/bin/codex",
-            sessionID: "xyz789",
-            cwd: "/home/user/work"
-        )
-        let script = "#!/bin/zsh -l\n\(command)\n"
+        let script = "#!/bin/zsh -l\ncd '/home/user/work' && exec '/usr/local/bin/codex' resume 'xyz789'\n"
         let expected: [LaunchStep] = [
             .exec(executable: "/Applications/Cursor.app/Contents/Resources/app/bin/cursor", arguments: ["/home/user/work"]),
             .runCommandFile(script: script)

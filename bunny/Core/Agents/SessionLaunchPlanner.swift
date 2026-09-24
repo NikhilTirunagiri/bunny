@@ -12,6 +12,9 @@ enum LaunchStep: Equatable {
 
 /// Planner for how to open an existing Claude Code or Codex session in various applications.
 enum SessionLaunchPlanner {
+    /// Character set for strict percent-encoding (unreserved characters only).
+    private static let strictUnreservedSet = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
     /// Escapes a string for safe use in POSIX shell commands using single-quote wrapping.
     /// Plain strings are wrapped in single quotes. Single quotes within the string are escaped
     /// by ending the quote, adding an escaped single quote, and resuming the quote.
@@ -38,6 +41,32 @@ enum SessionLaunchPlanner {
         }
     }
 
+    /// Private helper to generate launch steps for VS Code or Cursor editors.
+    private static func editorSteps(
+        editorCLI: String,
+        scheme: String,
+        harness: AgentHarness,
+        cliPath: String,
+        sessionID: String,
+        cwd: String
+    ) -> [LaunchStep] {
+        if harness == .claudeCode {
+            let encodedID = sessionID.addingPercentEncoding(withAllowedCharacters: strictUnreservedSet) ?? sessionID
+            let url = "\(scheme)://anthropic.claude-code/open?session=\(encodedID)"
+            return [
+                .exec(executable: editorCLI, arguments: [cwd]),
+                .openURL(url, delay: 1.0)
+            ]
+        } else {
+            let resumeCmd = resumeCommand(harness: harness, cliPath: cliPath, sessionID: sessionID, cwd: cwd)
+            let script = "#!/bin/zsh -l\n\(resumeCmd)\n"
+            return [
+                .exec(executable: editorCLI, arguments: [cwd]),
+                .runCommandFile(script: script)
+            ]
+        }
+    }
+
     /// Plans the steps needed to open a session in the specified application.
     /// Different applications and harnesses require different approaches (direct terminal execution,
     /// IDE extensions, command files, etc.).
@@ -58,38 +87,24 @@ enum SessionLaunchPlanner {
             ]
 
         case .vscode:
-            let editorCLI = "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
-            if harness == .claudeCode {
-                let encodedID = sessionID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? sessionID
-                let url = "vscode://anthropic.claude-code/open?session=\(encodedID)"
-                return [
-                    .exec(executable: editorCLI, arguments: [cwd]),
-                    .openURL(url, delay: 1.0)
-                ]
-            } else {
-                let script = "#!/bin/zsh -l\n\(resumeCmd)\n"
-                return [
-                    .exec(executable: editorCLI, arguments: [cwd]),
-                    .runCommandFile(script: script)
-                ]
-            }
+            return editorSteps(
+                editorCLI: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+                scheme: "vscode",
+                harness: harness,
+                cliPath: cliPath,
+                sessionID: sessionID,
+                cwd: cwd
+            )
 
         case .cursor:
-            let editorCLI = "/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
-            if harness == .claudeCode {
-                let encodedID = sessionID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? sessionID
-                let url = "cursor://anthropic.claude-code/open?session=\(encodedID)"
-                return [
-                    .exec(executable: editorCLI, arguments: [cwd]),
-                    .openURL(url, delay: 1.0)
-                ]
-            } else {
-                let script = "#!/bin/zsh -l\n\(resumeCmd)\n"
-                return [
-                    .exec(executable: editorCLI, arguments: [cwd]),
-                    .runCommandFile(script: script)
-                ]
-            }
+            return editorSteps(
+                editorCLI: "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+                scheme: "cursor",
+                harness: harness,
+                cliPath: cliPath,
+                sessionID: sessionID,
+                cwd: cwd
+            )
         }
     }
 }
