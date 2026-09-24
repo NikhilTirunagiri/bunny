@@ -137,9 +137,10 @@ final class CodexRunner: AgentRunner {
                 rawInput: nil
             )))
         case let .mcpElicitation(rpcID, serverName):
-            if serverName == BunnyToolsEndpoint.serverName {
-                // Codex's approval prompt for a Bunny tool call (seen under "on-request"); the Bunny
-                // tools are always allowed, like Claude's `--allowedTools mcp__bunny`.
+            if serverName == BunnyToolsEndpoint.serverName, options.tools != nil {
+                // Codex's approval prompt for a Bunny tool call (seen under "on-request"). Bunny tools this
+                // run attached are always allowed, like Claude's `--allowedTools mcp__bunny`; a "bunny"
+                // server from elsewhere (no tools on this run) is not.
                 process?.write(CodexWire.elicitationReply(rpcID: rpcID, accept: true))
             } else {
                 process?.write(CodexWire.methodNotFound(rpcID: rpcID))
