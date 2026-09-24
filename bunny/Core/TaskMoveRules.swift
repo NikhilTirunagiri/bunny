@@ -7,6 +7,10 @@ struct TaskNode: Equatable {
     let id: UUID
     var parentID: UUID?
     var sortOrder: Int
+    /// False when this task must stay top-level: it has subtasks (incl. archived ones),
+    /// an active agent run, or a timer. The rules also refuse nesting a task that has
+    /// subtasks among `nodes`, whatever this flag says.
+    var canNest: Bool = true
 }
 
 /// Where a drop landed within a row.
@@ -24,27 +28,40 @@ struct TaskPlacement: Equatable {
 /// Pure rules for drag-to-reorder and drag-into-nest (see spec §4). No SwiftData, no UI.
 enum TaskMoveRules {
     /// Zone from pointer y within a row of height h: y < 0.3h → above, y > 0.7h → below, else into.
-    static func zone(y: CGFloat, height: CGFloat) -> DropZone {
+    /// On an expanded parent whose subtasks sit right beneath it, the bottom zone means "into"
+    /// (append as its last subtask) rather than "below" (after the whole subtask block).
+    static func zone(y: CGFloat, height: CGFloat, expandedWithChildren: Bool = false) -> DropZone {
         if y < 0.3 * height { return .above }
-        if y > 0.7 * height { return .below }
+        if y > 0.7 * height { return expandedWithChildren ? .into : .below }
         return .into
     }
 
     /// Effective zone after rules (into → below when not allowed). nil = no-op.
     static func resolve(dragged: UUID, target: UUID, zone: DropZone, nodes: [TaskNode]) -> DropZone? {
         guard dragged != target else { return nil }
-        guard nodes.contains(where: { $0.id == dragged }),
+        guard let draggedNode = nodes.first(where: { $0.id == dragged }),
               let targetNode = nodes.first(where: { $0.id == target }) else { return nil }
         // Only one nesting level: dropping a task onto its own subtask is a no-op.
         if targetNode.parentID == dragged { return nil }
+
+        let draggedCanNest = draggedNode.canNest && !nodes.contains { $0.parentID == dragged }
+        let targetIsTopLevel = targetNode.parentID == nil
+
+        // Only one nesting level, and agent/timer tasks stay top-level: a task that can't
+        // nest may only land where its parent would be nil.
+        if !draggedCanNest {
+            let destinationParent = zone == .into ? target : targetNode.parentID
+            if destinationParent != nil {
+                return (zone == .into && targetIsTopLevel) ? .below : nil
+            }
+            return zone
+        }
 
         switch zone {
         case .above, .below:
             return zone
         case .into:
-            let draggedHasSubtasks = nodes.contains { $0.parentID == dragged }
-            let targetIsTopLevel = targetNode.parentID == nil
-            return (targetIsTopLevel && !draggedHasSubtasks) ? .into : .below
+            return targetIsTopLevel ? .into : .below
         }
     }
 

@@ -132,22 +132,6 @@ struct TaskRowView: View {
             inside ? coordinator.rowEntered(task.id) : coordinator.rowExited(task.id)
         }
         .onTapGesture { coordinator.rowClicked(task.id) }
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeight = $0 }
-        .onDrag {
-            TaskDrag.currentID = task.id
-            return NSItemProvider(object: task.id.uuidString as NSString)
-        } preview: {
-            dragPreview
-        }
-        // One drop target per row (spec §4): files → shelf, tasks → reorder / nest.
-        .onDrop(of: [.fileURL, .utf8PlainText], delegate: RowDropDelegate(
-            taskID: task.id,
-            rowHeight: rowHeight,
-            context: modelContext,
-            coordinator: coordinator,
-            indicator: $dropIndicator,
-            isFileTargeted: $isFileTargeted
-        ))
         .overlay { dropIndicatorView }
         .background {
             ConcentricRectangle()
@@ -159,6 +143,28 @@ struct TaskRowView: View {
                             : AnyShapeStyle(.clear))
                 )
         }
+        // Drag & drop live on the full-width row: the subtask indent and a 1 pt strip above and
+        // below (the list's inter-row gap) are part of the drop target, so there are no dead zones.
+        .padding(.leading, task.isSubtask ? 24 : 0)
+        .padding(.vertical, 1)
+        .contentShape(Rectangle())
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeight = $0 }
+        .onDrag {
+            TaskDrag.currentID = task.id
+            return NSItemProvider(object: task.id.uuidString as NSString)
+        } preview: {
+            dragPreview
+        }
+        // One drop target per row (spec §4): files → shelf, tasks → reorder / nest.
+        .onDrop(of: [.fileURL, .utf8PlainText], delegate: RowDropDelegate(
+            taskID: task.id,
+            rowHeight: rowHeight,
+            expandedWithChildren: !task.isSubtask && task.isExpanded && hasSubtasks,
+            context: modelContext,
+            coordinator: coordinator,
+            indicator: $dropIndicator,
+            isFileTargeted: $isFileTargeted
+        ))
         .onAppear {
             if appState.editingTaskID == task.id {
                 appState.editingTaskID = nil

@@ -4,6 +4,9 @@ import UniformTypeIdentifiers
 
 /// The task currently being dragged from a row, recorded when the drag starts so drop
 /// targets can preview the effective zone (the payload itself is only readable on drop).
+/// Plain-text drops are only accepted while it is set, so text dragged in from other apps
+/// is refused. Cleared on drop and when the row's drag session ends; a stale ID left by a
+/// cancelled drag is replaced by the next drag and resolves to a no-op if its task is gone.
 @MainActor
 enum TaskDrag {
     static var currentID: UUID?
@@ -15,6 +18,8 @@ enum TaskDrag {
 struct RowDropDelegate: DropDelegate {
     let taskID: UUID
     let rowHeight: CGFloat
+    /// An expanded parent with visible subtasks: its bottom zone appends as the last subtask.
+    let expandedWithChildren: Bool
     let context: ModelContext
     let coordinator: PanelCoordinator
     @Binding var indicator: DropZone?
@@ -25,7 +30,7 @@ struct RowDropDelegate: DropDelegate {
     }
 
     func validateDrop(info: DropInfo) -> Bool {
-        isFileDrag(info) || info.hasItemsConforming(to: [.utf8PlainText])
+        isFileDrag(info) || (TaskDrag.currentID != nil && info.hasItemsConforming(to: [.utf8PlainText]))
     }
 
     func dropEntered(info: DropInfo) {
@@ -68,7 +73,7 @@ struct RowDropDelegate: DropDelegate {
             return true
         }
 
-        let zone = TaskMoveRules.zone(y: info.location.y, height: max(rowHeight, 1))
+        let zone = dropZone(for: info)
         guard let provider = info.itemProviders(for: [.utf8PlainText]).first else { return false }
         TaskDrag.currentID = nil
         Task { @MainActor in
@@ -87,8 +92,13 @@ struct RowDropDelegate: DropDelegate {
 
     /// Updates the insertion indicator for a task drag. When the dragged task is known,
     /// the indicator shows the effective zone (into may degrade to below; no-ops show nothing).
+    private func dropZone(for info: DropInfo) -> DropZone {
+        TaskMoveRules.zone(y: info.location.y, height: max(rowHeight, 1),
+                           expandedWithChildren: expandedWithChildren)
+    }
+
     private func update(_ info: DropInfo) -> DropProposal? {
-        let zone = TaskMoveRules.zone(y: info.location.y, height: max(rowHeight, 1))
+        let zone = dropZone(for: info)
         var effective: DropZone? = zone
         if let dragged = TaskDrag.currentID {
             if let hint = TaskDrag.hint, hint.dragged == dragged, hint.target == taskID, hint.zone == zone {
@@ -111,7 +121,8 @@ struct RowDropDelegate: DropDelegate {
     private static func loadURL(_ provider: NSItemProvider) async -> URL? {
         await withCheckedContinuation { continuation in
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                continuation.resume(returning: url)
+                // Finder may hand over file-reference URLs (file:///.file/id=…); bookmark the path.
+                continuation.resume(returning: url.map { ($0 as NSURL).filePathURL ?? $0 })
             }
         }
     }

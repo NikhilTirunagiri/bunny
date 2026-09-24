@@ -182,4 +182,82 @@ struct TaskMoveRulesTests {
         #expect(byID[a2] == TaskPlacement(id: a2, parentID: a, sortOrder: 0))
         #expect(byID[b1] == nil)
     }
+
+    // MARK: - Expanded parent: bottom zone appends as last subtask
+
+    @Test func zoneBottomOfExpandedParentMeansInto() {
+        #expect(TaskMoveRules.zone(y: 90, height: 100, expandedWithChildren: true) == .into)
+        #expect(TaskMoveRules.zone(y: 10, height: 100, expandedWithChildren: true) == .above)
+        #expect(TaskMoveRules.zone(y: 50, height: 100, expandedWithChildren: true) == .into)
+        #expect(TaskMoveRules.zone(y: 90, height: 100, expandedWithChildren: false) == .below)
+    }
+
+    // MARK: - One nesting level: a parent never lands inside another parent
+
+    /// P→C and Q→S; P (has subtasks) dropped on S (Q's subtask) must never end up under Q.
+    @Test func parentWithSubtasksOnAnotherTasksSubtaskIsNoOp() {
+        let p = UUID(), c = UUID(), q = UUID(), s = UUID()
+        let nodes = [
+            TaskNode(id: p, parentID: nil, sortOrder: 0),
+            TaskNode(id: c, parentID: p, sortOrder: 0),
+            TaskNode(id: q, parentID: nil, sortOrder: 1),
+            TaskNode(id: s, parentID: q, sortOrder: 0),
+        ]
+        for zone in [DropZone.above, .below, .into] {
+            #expect(TaskMoveRules.resolve(dragged: p, target: s, zone: zone, nodes: nodes) == nil)
+            #expect(TaskMoveRules.move(dragged: p, target: s, zone: zone, nodes: nodes) == [])
+        }
+    }
+
+    /// Same, when the subtasks are only known through `canNest` (e.g. they are archived).
+    @Test func parentFlaggedCannotNestAboveSubtaskIsNoOp() {
+        let p = UUID(), q = UUID(), s = UUID()
+        let nodes = [
+            TaskNode(id: p, parentID: nil, sortOrder: 0, canNest: false),
+            TaskNode(id: q, parentID: nil, sortOrder: 1),
+            TaskNode(id: s, parentID: q, sortOrder: 0),
+        ]
+        #expect(TaskMoveRules.resolve(dragged: p, target: s, zone: .above, nodes: nodes) == nil)
+        #expect(TaskMoveRules.resolve(dragged: p, target: s, zone: .below, nodes: nodes) == nil)
+        #expect(TaskMoveRules.move(dragged: p, target: s, zone: .above, nodes: nodes) == [])
+    }
+
+    // MARK: - canNest = false (agent running / timer): stays top-level
+
+    @Test func cannotNestIntoTopLevelDegradesToBelow() {
+        let a = UUID(), b = UUID(), c = UUID()
+        let nodes = [
+            TaskNode(id: a, parentID: nil, sortOrder: 0, canNest: false),
+            TaskNode(id: b, parentID: nil, sortOrder: 1),
+            TaskNode(id: c, parentID: nil, sortOrder: 2),
+        ]
+        #expect(TaskMoveRules.resolve(dragged: a, target: b, zone: .into, nodes: nodes) == .below)
+        // A lands after B, still top-level: [B, A, C].
+        let placements = TaskMoveRules.move(dragged: a, target: b, zone: .into, nodes: nodes)
+        let byID = Dictionary(uniqueKeysWithValues: placements.map { ($0.id, $0) })
+        #expect(byID[a] == TaskPlacement(id: a, parentID: nil, sortOrder: 1))
+        #expect(byID[b] == TaskPlacement(id: b, parentID: nil, sortOrder: 0))
+    }
+
+    @Test func cannotNestAboveSubtaskIsNoOp() {
+        let a = UUID(), b = UUID(), b1 = UUID()
+        let nodes = [
+            TaskNode(id: a, parentID: nil, sortOrder: 0, canNest: false),
+            TaskNode(id: b, parentID: nil, sortOrder: 1),
+            TaskNode(id: b1, parentID: b, sortOrder: 0),
+        ]
+        #expect(TaskMoveRules.resolve(dragged: a, target: b1, zone: .above, nodes: nodes) == nil)
+        #expect(TaskMoveRules.resolve(dragged: a, target: b1, zone: .into, nodes: nodes) == nil)
+        #expect(TaskMoveRules.move(dragged: a, target: b1, zone: .above, nodes: nodes) == [])
+    }
+
+    @Test func cannotNestStillReordersAtTopLevel() {
+        let a = UUID(), b = UUID()
+        let nodes = [
+            TaskNode(id: a, parentID: nil, sortOrder: 0, canNest: false),
+            TaskNode(id: b, parentID: nil, sortOrder: 1),
+        ]
+        #expect(TaskMoveRules.resolve(dragged: a, target: b, zone: .below, nodes: nodes) == .below)
+        #expect(TaskMoveRules.resolve(dragged: a, target: b, zone: .above, nodes: nodes) == .above)
+    }
 }

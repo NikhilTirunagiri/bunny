@@ -14,20 +14,27 @@ enum TaskMover {
         return (try? context.fetch(descriptor)) ?? []
     }
 
-    private static func nodes(for tasks: [BunnyTask]) -> [TaskNode] {
-        tasks.map { TaskNode(id: $0.id, parentID: $0.parentID, sortOrder: $0.sortOrder) }
+    /// Tree nodes for the active tasks. A task can't nest when it has subtasks — counted over
+    /// all tasks, archived included, so restoring them can't create grandchildren — or while
+    /// an agent is running on it or it has a timer.
+    private static func nodes(for tasks: [BunnyTask], in context: ModelContext) -> [TaskNode] {
+        let allParentIDs = Set(((try? context.fetch(FetchDescriptor<BunnyTask>())) ?? []).compactMap(\.parentID))
+        return tasks.map { task in
+            TaskNode(id: task.id, parentID: task.parentID, sortOrder: task.sortOrder,
+                     canNest: !allParentIDs.contains(task.id) && !task.runState.isActive && !task.hasTimer)
+        }
     }
 
     /// The zone a drop would actually use (into can degrade to below); nil = no-op.
     static func resolvedZone(dragged: UUID, target: UUID, zone: DropZone, in context: ModelContext) -> DropZone? {
         TaskMoveRules.resolve(dragged: dragged, target: target, zone: zone,
-                              nodes: nodes(for: activeTasks(in: context)))
+                              nodes: nodes(for: activeTasks(in: context), in: context))
     }
 
     static func perform(dragged: UUID, target: UUID, zone: DropZone, in context: ModelContext) {
         let tasks = activeTasks(in: context)
         let placements = TaskMoveRules.move(dragged: dragged, target: target, zone: zone,
-                                            nodes: nodes(for: tasks))
+                                            nodes: nodes(for: tasks, in: context))
         guard !placements.isEmpty else { return }
 
         let byID = Dictionary(tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

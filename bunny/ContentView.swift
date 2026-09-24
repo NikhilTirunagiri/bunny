@@ -69,24 +69,25 @@ struct ContentView: View {
 
     private var taskListView: some View {
         ScrollView {
-            LazyVStack(spacing: 2) {
+            // Rows pad themselves 1 pt above and below (part of their drop target), so the
+            // 2 pt gap between groups comes from the rows and subtasks overlap it away (-2).
+            LazyVStack(spacing: 0) {
                 ForEach(topLevelTasks) { task in
                     let subs = subtasks(of: task)
                     // Each row is its own drag source and drop target (TaskRowView / RowDropDelegate);
                     // subtasks keep their parentID, so a collapsed parent moves with them.
-                    VStack(spacing: 0) {
+                    VStack(spacing: -2) {
                         TaskRowView(task: task, hasSubtasks: !subs.isEmpty)
                         if task.isExpanded && !subs.isEmpty {
                             ForEach(subs) { sub in
                                 TaskRowView(task: sub, hasSubtasks: false)
-                                    .padding(.leading, 24)
                             }
                         }
                     }
                 }
             }
             .padding(.horizontal, 6)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
         }
         .frame(minHeight: 360)
     }
