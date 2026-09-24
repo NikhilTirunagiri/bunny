@@ -56,31 +56,39 @@ struct AgentPanelSection: View {
 
     // MARK: - Idle
 
-    private var startRow: some View {
-        HStack(spacing: 8) {
-            Button {
-                AgentSupervisor.shared.start(task, harness: .claudeCode)
-            } label: {
-                Text("Start with Claude Code")
-                    .font(.system(size: 11))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glass)
-            .controlSize(.small)
+    /// "<Harness> · <model> · <effort>" (owner change request: the button label is just "Handoff").
+    private var caption: String {
+        let model = displayValue(task.agentModel ?? AgentSettings.model(for: harness))
+        let effort = displayValue(task.agentEffort ?? AgentSettings.effort(for: harness))
+        return "\(harness.displayName) · \(model) · \(effort)"
+    }
 
-            Button {
-                AgentSupervisor.shared.start(task, harness: .codex)
-            } label: {
-                Text("Start with Codex")
-                    .font(.system(size: 11))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .frame(maxWidth: .infinity)
+    private func displayValue(_ raw: String) -> String { raw.isEmpty ? "Default" : raw }
+
+    /// Left-click hands off immediately with the resolved harness/model/effort (`harness`, which is
+    /// `task.agentHarness` when the owner picked one via the context menu, else Settings' default).
+    /// Right-click opens `AgentConfigMenu` to change the agent, model or effort for this task's next run.
+    private var startRow: some View {
+        Button {
+            AgentSupervisor.shared.start(task, harness: harness)
+        } label: {
+            HStack(spacing: 8) {
+                AgentLogo(harness: harness, size: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Handoff")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(caption)
+                        .font(.system(size: 10))
+                        .opacity(0.75)
+                }
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.glass)
-            .controlSize(.small)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.glassProminent)
+        .contextMenu {
+            AgentConfigMenu(task: task)
         }
     }
 
@@ -88,8 +96,7 @@ struct AgentPanelSection: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: harness.symbolName)
-                .font(.system(size: 11))
+            AgentLogo(harness: harness, size: 13)
             Text(harness.displayName)
                 .font(.system(size: 12, weight: .semibold))
             Text(task.runState.label)
@@ -146,6 +153,115 @@ struct AgentPanelSection: View {
             }
 
             Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Right-click configuration menu shared by the panel's "Handoff" button and the row `AgentButton`
+/// (owner change request, spec §2/§3): choose the agent for this task's next run — which, since
+/// `BunnyTask` has no dedicated "pending harness" field, is stored in the existing `agentHarness`
+/// (the same field a run sets at launch; harmless to set early since callers only show this menu
+/// while the task isn't actively running) — its model and effort, or reset all three to Settings'
+/// defaults.
+struct AgentConfigMenu: View {
+    let task: BunnyTask
+
+    /// Fetched off the shared cache when the current choice is Codex. Empty means "not fetched yet
+    /// or the fetch failed" — the Model submenu then offers only Default (Review Focus #5's fallback).
+    @State private var codexModels: [CodexModel] = []
+
+    private var harness: AgentHarness { task.harness ?? AgentSettings.defaultHarness }
+
+    private static let claudeModelAliases = ["fable", "opus", "sonnet", "haiku"]
+    private static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
+    private static let codexFallbackEfforts = ["low", "medium", "high"]
+
+    var body: some View {
+        Group {
+            Menu("Agent") {
+                agentChoice(.claudeCode)
+                agentChoice(.codex)
+            }
+            Menu("Model") { modelItems }
+            Menu("Effort") { effortItems }
+            Button("Use Defaults") {
+                task.agentHarness = nil
+                task.agentModel = nil
+                task.agentEffort = nil
+            }
+            .disabled(task.agentHarness == nil && task.agentModel == nil && task.agentEffort == nil)
+        }
+        .onAppear(perform: loadCodexModelsIfNeeded)
+    }
+
+    private func agentChoice(_ candidate: AgentHarness) -> some View {
+        pickerButton(title: candidate.displayName, isSelected: harness == candidate) {
+            task.agentHarness = candidate.rawValue
+            // Model/effort overrides are harness-specific; switching agents must not carry them over.
+            task.agentModel = nil
+            task.agentEffort = nil
+            loadCodexModelsIfNeeded()
+        }
+    }
+
+    @ViewBuilder
+    private var modelItems: some View {
+        let current = task.agentModel ?? ""
+        pickerButton(title: "Default", isSelected: current.isEmpty) {
+            task.agentModel = nil
+        }
+        switch harness {
+        case .claudeCode:
+            ForEach(Self.claudeModelAliases, id: \.self) { alias in
+                pickerButton(title: alias, isSelected: current == alias) {
+                    task.agentModel = alias
+                }
+            }
+        case .codex:
+            ForEach(codexModels, id: \.id) { model in
+                pickerButton(title: model.displayName, isSelected: current == model.id) {
+                    task.agentModel = model.id
+                }
+            }
+        }
+    }
+
+    private func effortOptions(currentModel: String) -> [String] {
+        switch harness {
+        case .claudeCode: return Self.claudeEfforts
+        case .codex: return codexModels.first(where: { $0.id == currentModel })?.efforts ?? Self.codexFallbackEfforts
+        }
+    }
+
+    @ViewBuilder
+    private var effortItems: some View {
+        let currentModel = task.agentModel ?? AgentSettings.model(for: harness)
+        let currentEffort = task.agentEffort ?? ""
+        let options = effortOptions(currentModel: currentModel)
+        pickerButton(title: "Default", isSelected: currentEffort.isEmpty) {
+            task.agentEffort = nil
+        }
+        ForEach(options, id: \.self) { effort in
+            pickerButton(title: effort, isSelected: currentEffort == effort) {
+                task.agentEffort = effort
+            }
+        }
+    }
+
+    private func pickerButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            if isSelected {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+    }
+
+    private func loadCodexModelsIfNeeded() {
+        guard harness == .codex, codexModels.isEmpty else { return }
+        CodexModelCache.fetch { models in
+            if let models { codexModels = models }
         }
     }
 }
