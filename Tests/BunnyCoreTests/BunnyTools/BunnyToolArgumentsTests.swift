@@ -45,6 +45,16 @@ struct BunnyToolArgumentsTests {
         #expect(isFailure(result))
     }
 
+    @Test func createTaskWrongTypeTitleFailsWithTypeMessage() {
+        let result = BunnyToolArguments.parse(name: "create_task", arguments: ["title": 123])
+        #expect(result == .failure(BunnyToolError(message: "title must be a string")))
+    }
+
+    @Test func createTaskMissingTitleFailsWithRequiredMessage() {
+        let result = BunnyToolArguments.parse(name: "create_task", arguments: [:])
+        #expect(result == .failure(BunnyToolError(message: "title is required")))
+    }
+
     @Test func createTaskTitleOverCapFails() {
         let longTitle = String(repeating: "a", count: 201)
         let result = BunnyToolArguments.parse(name: "create_task", arguments: ["title": longTitle])

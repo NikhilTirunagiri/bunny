@@ -128,6 +128,17 @@ struct MCPServerCoreTests {
         #expect(result?["protocolVersion"] as? String == "2025-06-18")
     }
 
+    /// Claude Code 2.1.281 requests `protocolVersion: "2025-11-25"` (newer than our allow-list,
+    /// per docs/superpowers/research/mcp-http.md §1) — it must fall back, not be hard-rejected.
+    @Test func initializeFallsBackForClaudeCodesNewerProtocolVersion() {
+        let server = MCPServerCore(token: token, backend: FakeBunnyToolsBackend())
+        let response = server.handle(makeRequest(body: initializeBody(protocolVersion: "2025-11-25")))
+        #expect(response.status == 200)
+        let json = decodeJSON(response)
+        let result = json["result"] as? [String: Any]
+        #expect(result?["protocolVersion"] as? String == "2025-06-18")
+    }
+
     // MARK: - ping
 
     @Test func pingReturnsEmptyResult() {
@@ -174,9 +185,29 @@ struct MCPServerCoreTests {
         #expect(json["id"] as? Int == 9)
     }
 
-    @Test func malformedJSONReturnsParseError() {
+    @Test func malformedJSONReturns400WithParseError() {
         let server = MCPServerCore(token: token, backend: FakeBunnyToolsBackend())
         let response = server.handle(makeRequest(rawBody: Data("{not json".utf8)))
+        #expect(response.status == 400)
+        let json = decodeJSON(response)
+        let error = json["error"] as? [String: Any]
+        #expect(error?["code"] as? Int == -32700)
+    }
+
+    @Test func topLevelArrayBatchReturns400WithInvalidRequest() {
+        let server = MCPServerCore(token: token, backend: FakeBunnyToolsBackend())
+        let response = server.handle(makeRequest(rawBody: Data("[]".utf8)))
+        #expect(response.status == 400)
+        let json = decodeJSON(response)
+        let error = json["error"] as? [String: Any]
+        #expect(error?["code"] as? Int == -32600)
+        #expect(error?["message"] as? String == "batch requests are not supported")
+    }
+
+    @Test func nonObjectJSONReturns400WithParseError() {
+        let server = MCPServerCore(token: token, backend: FakeBunnyToolsBackend())
+        let response = server.handle(makeRequest(rawBody: Data("42".utf8)))
+        #expect(response.status == 400)
         let json = decodeJSON(response)
         let error = json["error"] as? [String: Any]
         #expect(error?["code"] as? Int == -32700)
