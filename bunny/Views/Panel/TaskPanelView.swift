@@ -70,10 +70,9 @@ struct TaskPanelView: View {
         }
     }
 
-    /// Spec B mounts the agent status / questions UI here.
     @ViewBuilder
     private func agentSection(_ task: BunnyTask) -> some View {
-        EmptyView()
+        AgentPanelSection(task: task)
     }
 
     private func commitTitle(_ task: BunnyTask) {
