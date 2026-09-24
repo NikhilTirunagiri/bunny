@@ -165,6 +165,11 @@ struct ArchiveView: View {
     }
 
     private func restore(_ task: BunnyTask, subs: [BunnyTask]) {
+        // A restored task starts fresh: no stale run state, question or session from before archiving.
+        for t in [task] + subs {
+            if t.runState.isActive { AgentSupervisor.shared.stop(t) }   // e.g. archived while needsInput
+            AgentSupervisor.shared.clear(t)
+        }
         task.archivedAt = nil
         task.isCompleted = false
         task.completedAt = nil

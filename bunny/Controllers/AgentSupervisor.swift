@@ -50,6 +50,9 @@ final class AgentSupervisor {
     /// Tasks whose timer was already seen expired, so an expiry is acted on once, when it flips.
     @ObservationIgnored private var expiredTimers: Set<UUID> = []
     @ObservationIgnored private var checkTimer: Timer?
+    /// Tasks whose session is being opened (the ≤2 s handoff wait plus the launch itself):
+    /// repeated opens are ignored until it finishes, so a session is never launched twice.
+    @ObservationIgnored private var pendingHandoffs: Set<UUID> = []
 
     private static let wrapUpMessage = "Time's up — stop here and reply with a summary of what's done and what's left."
     private static let timeRanOutSuffix = " · Time ran out"
@@ -99,6 +102,7 @@ final class AgentSupervisor {
         pendingLaunches.removeAll()
         wrapUps.removeAll()
         exitWaiters.removeAll()
+        pendingHandoffs.removeAll()
         // Synchronous: the app is about to exit, so terminate()'s delayed SIGKILL would never run.
         for runner in terminating.values {
             runner.terminateNow()
@@ -254,6 +258,7 @@ final class AgentSupervisor {
         }
         let harness = task.harness ?? AgentSettings.defaultHarness
         let taskID = task.id
+        guard pendingHandoffs.insert(taskID).inserted else { return }
 
         if task.runState.isActive {
             // One process per session: stop the background one, and open the app only once it has exited.
@@ -376,11 +381,16 @@ final class AgentSupervisor {
     }
 
     /// Opens the session in the owner's app and records which app was actually used (or the fallback text).
+    /// Ends the task's `pendingHandoffs` entry once the launch has completed.
     private func launchSession(_ taskID: UUID, harness: AgentHarness, sessionID: String) {
-        guard let task = task(with: taskID) else { return }
+        guard let task = task(with: taskID) else {
+            pendingHandoffs.remove(taskID)
+            return
+        }
         let cwd = task.agentWorkingDirectory ?? AgentSettings.defaultWorkspace
         Task { @MainActor [weak self] in
             let outcome = await SessionLauncher.open(harness: harness, sessionID: sessionID, cwd: cwd)
+            self?.pendingHandoffs.remove(taskID)
             guard let self, let task = self.task(with: taskID), !task.runState.isActive else { return }
             task.agentActivity = outcome.activityText
             self.didChangeState()
