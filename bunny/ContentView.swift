@@ -40,14 +40,20 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             if activeView == .tasks {
-                TextField("What's next on your list?", text: $newTaskTitle)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 15))
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .onSubmit { addTask() }
-
-                Divider()
+                HStack(spacing: 8) {
+                    Image(systemName: "plus")
+                        .foregroundStyle(.secondary)
+                    TextField("What's next on your list?", text: $newTaskTitle)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 15))
+                        .onSubmit { addTask() }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 10, style: .continuous))
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
             }
 
             switch activeView {
@@ -56,16 +62,16 @@ struct ContentView: View {
             case .settings: SettingsView()
             }
 
-            Divider()
             bottomBar
         }
+        .containerShape(.rect(cornerRadius: 16))
         .frame(width: 340)
         .preferredColorScheme(colorScheme)
     }
 
     private var taskListView: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: 2) {
                 ForEach(topLevelTasks) { task in
                     let subs = subtasks(of: task)
                     VStack(spacing: 0) {
@@ -77,7 +83,12 @@ struct ContentView: View {
                             }
                         }
                     }
-                    .background(dropTargetID == task.id ? Color.accentColor.opacity(0.08) : Color.clear)
+                    .background {
+                        if dropTargetID == task.id {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.08))
+                        }
+                    }
                     .onDrag {
                         return NSItemProvider(object: task.id.uuidString as NSString)
                     }
@@ -93,6 +104,7 @@ struct ContentView: View {
                     }
                 }
             }
+            .padding(.horizontal, 6)
             .padding(.vertical, 8)
         }
         .frame(minHeight: 360)
@@ -108,32 +120,38 @@ struct ContentView: View {
     }
 
     private var bottomBar: some View {
-        HStack {
-            Button {
-                activeView = activeView == .archive ? .tasks : .archive
-            } label: {
-                Image(systemName: activeView == .archive ? "checklist" : "archivebox")
-                    .font(.system(size: 14))
-                    .foregroundStyle(activeView == .archive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
-            }
-            .buttonStyle(.plain)
-            .padding(.leading, 14)
-            .help(activeView == .archive ? "Back to tasks" : "Archive")
+        GlassEffectContainer(spacing: 8) {
+            HStack {
+                Button {
+                    activeView = activeView == .archive ? .tasks : .archive
+                } label: {
+                    Image(systemName: activeView == .archive ? "checklist" : "archivebox")
+                        .font(.system(size: 14))
+                        .foregroundStyle(activeView == .archive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .padding(.leading, 14)
+                .help(activeView == .archive ? "Back to tasks" : "Archive")
 
-            Spacer()
+                Spacer()
 
-            Button {
-                activeView = activeView == .settings ? .tasks : .settings
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 14))
-                    .foregroundStyle(activeView == .settings ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                Button {
+                    activeView = activeView == .settings ? .tasks : .settings
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14))
+                        .foregroundStyle(activeView == .settings ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .padding(.trailing, 14)
+                .help(activeView == .settings ? "Back to tasks" : "Settings")
             }
-            .buttonStyle(.plain)
-            .padding(.trailing, 14)
-            .help(activeView == .settings ? "Back to tasks" : "Settings")
         }
-        .frame(height: 36)
+        .frame(height: 44)
     }
 
     private func addTask() {

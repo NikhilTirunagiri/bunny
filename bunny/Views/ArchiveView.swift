@@ -6,6 +6,7 @@ struct ArchiveView: View {
     private var allArchivedTasks: [BunnyTask]
 
     @State private var expandedIDs: Set<UUID> = []
+    @State private var hovered: UUID? = nil
 
     private var archivedParents: [BunnyTask] {
         let archivedParentIDs = Set(allArchivedTasks.filter { $0.parentID == nil }.map { $0.id })
@@ -83,13 +84,12 @@ struct ArchiveView: View {
                         }
                     } header: {
                         Text(group.key)
-                            .font(.caption)
-                            .fontWeight(.medium)
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 16)
-                            .padding(.vertical, 5)
+                            .padding(.top, 10)
+                            .padding(.bottom, 5)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.regularMaterial)
                     }
                 }
             }
@@ -130,6 +130,13 @@ struct ArchiveView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
+        .background {
+            ConcentricRectangle()
+                .fill(hovered == task.id ? AnyShapeStyle(.quaternary.opacity(0.7)) : AnyShapeStyle(.clear))
+        }
+        .onHover { isHovering in
+            hovered = isHovering ? task.id : (hovered == task.id ? nil : hovered)
+        }
     }
 
     private func subtaskRow(_ task: BunnyTask) -> some View {
@@ -147,6 +154,14 @@ struct ArchiveView: View {
         .padding(.leading, 36)
         .padding(.trailing, 12)
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .background {
+            ConcentricRectangle()
+                .fill(hovered == task.id ? AnyShapeStyle(.quaternary.opacity(0.7)) : AnyShapeStyle(.clear))
+        }
+        .onHover { isHovering in
+            hovered = isHovering ? task.id : (hovered == task.id ? nil : hovered)
+        }
     }
 
     private func restore(_ task: BunnyTask, subs: [BunnyTask]) {

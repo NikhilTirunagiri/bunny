@@ -38,7 +38,7 @@ struct TimerPickerView: View {
                         task.timerStartedAt = nil
                         dismiss()
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                 }
                 Spacer()
                 Button("Start") {
@@ -48,7 +48,7 @@ struct TimerPickerView: View {
                     task.timerStartedAt = Date()
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(totalSeconds == 0)
             }
         }
@@ -95,12 +95,16 @@ struct TimerPickerView: View {
                 } label: {
                     Image(systemName: "minus")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.small)
 
                 TextField("", text: text)
                     .multilineTextAlignment(.center)
                     .font(.system(size: 18, design: .monospaced))
                     .frame(width: 34)
+                    .padding(.vertical, 2)
+                    .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 8))
                     .focused($focused, equals: field)
                     .onChange(of: text.wrappedValue) { _, v in
                         let filtered = String(v.filter(\.isNumber).prefix(2))
@@ -116,7 +120,9 @@ struct TimerPickerView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.small)
             }
         }
     }
