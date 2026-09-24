@@ -1,0 +1,12 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<linearGradient id="trail" x1="60" y1="0" x2="290" y2="0" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>
+<stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.7"/>
+<stop offset="1" stop-color="#FFFFFF"/>
+</linearGradient>
+</defs>
+<rect x="104" y="406" width="186" height="46" rx="23" fill="url(#trail)"/>
+<rect x="60" y="497" width="168" height="46" rx="23" fill="url(#trail)"/>
+<rect x="96" y="588" width="176" height="46" rx="23" fill="url(#trail)"/>
+</svg>
