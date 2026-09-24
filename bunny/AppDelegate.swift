@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         do {
-            modelContainer = try ModelContainer(for: BunnyTask.self)
+            modelContainer = try ModelContainer(for: BunnyTask.self, ShelfItem.self)
         } catch {
             fatalError("ModelContainer init failed: \(error)")
         }

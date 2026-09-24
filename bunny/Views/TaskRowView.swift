@@ -145,6 +145,7 @@ struct TaskRowView: View {
         if !trimmed.isEmpty {
             task.title = trimmed
         } else if task.title.isEmpty {
+            ShelfService.removeAll(for: task.id, in: modelContext)
             modelContext.delete(task)
         }
         isEditing = false
@@ -152,6 +153,7 @@ struct TaskRowView: View {
 
     private func cancelEdit() {
         if task.title.isEmpty {
+            ShelfService.removeAll(for: task.id, in: modelContext)
             modelContext.delete(task)
         }
         isEditing = false

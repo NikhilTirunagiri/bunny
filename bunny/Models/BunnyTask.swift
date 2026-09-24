@@ -5,6 +5,7 @@ import SwiftData
 final class BunnyTask {
     var id: UUID = UUID()
     var title: String = ""
+    var taskDescription: String = ""
     var isCompleted: Bool = false
     var completedAt: Date? = nil
     var isPinned: Bool = false
