@@ -43,11 +43,8 @@ struct AgentSettingsSection: View {
             Section {
                 Picker("Default agent", selection: $defaultHarness) {
                     ForEach(AgentHarness.allCases, id: \.self) { harness in
-                        HStack(spacing: 4) {
-                            AgentLogo(harness: harness, size: 12)
-                            Text(harness.displayName)
-                        }
-                        .tag(harness)
+                        // One Text per option: a segmented picker turns each child of a stack into its own segment.
+                        Text(harness.displayName).tag(harness)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -72,7 +69,6 @@ struct AgentSettingsSection: View {
 
             Section("Model & effort") {
                 claudeModelEffortRows
-                Divider()
                 codexModelEffortRows
             }
 

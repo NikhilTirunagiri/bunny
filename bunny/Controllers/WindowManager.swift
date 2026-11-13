@@ -66,8 +66,12 @@ final class WindowManager: NSObject, NSWindowDelegate {
     private func present(_ window: NSWindow) {
         onWillShowWindow?()
         NSApp.setActivationPolicy(.regular)
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        // Order the window in only after Bunny is a regular, active app. Ordered in while still an
+        // accessory, it joins another app's full-screen Space and floats above that app for good.
+        DispatchQueue.main.async {
+            NSApp.activate()
+            window.makeKeyAndOrderFront(nil)
+        }
     }
 
     func windowWillClose(_ notification: Notification) {

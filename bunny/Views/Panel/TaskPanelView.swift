@@ -7,8 +7,7 @@ struct TaskPanelView: View {
     @Query private var matches: [BunnyTask]
     @State private var titleDraft = ""
     @FocusState private var focus: Field?
-    /// An agent-question text field has focus (reported by `AgentPanelSection`).
-    @State private var answerFieldFocused = false
+    @AppStorage(PanelCoordinator.pinnedKey) private var pinned = false
     private enum Field { case title, description }
 
     init(taskID: UUID) {
@@ -16,29 +15,62 @@ struct TaskPanelView: View {
         _matches = Query(filter: #Predicate<BunnyTask> { $0.id == taskID })
     }
 
+    /// Archived, in Trash or deleted (also by an agent through Bunny tools): the note side closes.
+    private var isGone: Bool {
+        guard let task = matches.first else { return true }
+        return task.archivedAt != nil || task.deletedAt != nil
+    }
+
     var body: some View {
         Group {
-            // Archived tasks count as missing: the panel shows nothing for them.
-            if let task = matches.first, task.archivedAt == nil {
+            if let task = matches.first, !isGone {
                 content(task)
             } else {
                 Color.clear
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onHover { $0 ? coordinator.panelEntered() : coordinator.panelExited() }
-        // One combined signal so moving focus between the description and an answer field never
-        // briefly releases the editing hold (which would let the panel switch mid-typing).
-        .onChange(of: focus != nil || answerFieldFocused) { _, editing in coordinator.setEditing(editing) }
+        .onChange(of: isGone, initial: true) { _, gone in
+            if gone { coordinator.tasksRemoved([taskID]) }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 4) {
+            Spacer(minLength: 0)
+            Button { pinned.toggle() } label: {
+                Image(systemName: pinned ? "pin.fill" : "pin")
+                    .font(.system(size: 11))
+                    .foregroundStyle(pinned ? Color.accentColor : .secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(pinned ? "Unpin: close the note side on a second click or Esc" : "Pin: keep the note side open")
+            Button { coordinator.closeNoteSide() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Close")
+        }
     }
 
     @ViewBuilder
     private func content(_ task: BunnyTask) -> some View {
         @Bindable var task = task
         VStack(alignment: .leading, spacing: 12) {
-            if let pid = task.parentID {
-                ParentBreadcrumb(parentID: pid)
+            HStack(alignment: .center, spacing: 6) {
+                if let pid = task.parentID {
+                    ParentBreadcrumb(parentID: pid)
+                }
+                header
             }
+            .padding(.top, -6)
+            .padding(.trailing, -6)
             TextField("Title", text: $titleDraft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 17, weight: .semibold))
@@ -60,10 +92,8 @@ struct TaskPanelView: View {
         .padding(16)
         .onDisappear {
             // Switching task (new `.id`) or archiving tears this view down without a focus change:
-            // keep an in-progress title and release the coordinator's editing hold.
-            // Skip deleted models: reading a deleted model's attributes can trap.
+            // keep an in-progress title. Skip deleted models: reading a deleted model's attributes can trap.
             if task.modelContext != nil, !task.isDeleted, titleDraft != task.title { commitTitle(task) }
-            coordinator.setEditing(false)
         }
     }
 
@@ -79,8 +109,10 @@ struct TaskPanelView: View {
             }
             ZStack(alignment: .topLeading) {
                 if task.taskDescription.isEmpty {
+                    // TextEditor insets its text by the line fragment padding (5 pt); match it so the caret
+                    // sits before the hint's first letter, not on top of it.
                     Text("Add a description…").font(.system(size: 13)).foregroundStyle(.tertiary)
-                        .padding(.top, 1).allowsHitTesting(false)
+                        .padding(.leading, 5).allowsHitTesting(false)
                 }
                 TextEditor(text: $task.taskDescription)
                     .font(.system(size: 13))
@@ -100,7 +132,7 @@ struct TaskPanelView: View {
     @ViewBuilder
     private func agentSection(_ task: BunnyTask) -> some View {
         if !task.isSubtask {
-            AgentPanelSection(task: task, onAnswerFieldFocusChange: { answerFieldFocused = $0 })
+            AgentPanelSection(task: task)
         }
     }
 
@@ -141,7 +173,7 @@ private struct PanelMetaLine: View {
     init(task: BunnyTask) {
         self.task = task
         let taskID = task.id
-        _children = Query(filter: #Predicate<BunnyTask> { $0.parentID == taskID && $0.archivedAt == nil },
+        _children = Query(filter: #Predicate<BunnyTask> { $0.parentID == taskID && $0.archivedAt == nil && $0.deletedAt == nil },
                           sort: [SortDescriptor(\BunnyTask.sortOrder), SortDescriptor(\BunnyTask.createdAt)])
     }
 

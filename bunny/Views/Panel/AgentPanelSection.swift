@@ -138,6 +138,7 @@ struct AgentPanelSection: View {
                     .font(.system(size: 12))
             }
             .buttonStyle(.glass)
+            .disabled(task.agentSessionID == nil)
             .help(task.agentSessionID == nil ? "" : AgentButton.sessionToolsNote)
 
             if task.runState.isActive {
@@ -188,10 +189,11 @@ struct AgentConfigMenu: View {
             Menu("Effort") { effortItems }
             Button("Use Defaults") {
                 task.agentHarness = nil
+                task.agentHarnessChosen = false
                 task.agentModel = nil
                 task.agentEffort = nil
             }
-            .disabled(task.agentHarness == nil && task.agentModel == nil && task.agentEffort == nil)
+            .disabled(!task.agentHarnessChosen && task.agentHarness == nil && task.agentModel == nil && task.agentEffort == nil)
         }
         .onAppear { codexModels.loadIfNeeded() }
     }
@@ -199,6 +201,7 @@ struct AgentConfigMenu: View {
     private func agentChoice(_ candidate: AgentHarness) -> some View {
         pickerButton(title: candidate.displayName, isSelected: harness == candidate) {
             task.agentHarness = candidate.rawValue
+            task.agentHarnessChosen = true
             // Model/effort overrides are harness-specific; switching agents must not carry them over.
             task.agentModel = nil
             task.agentEffort = nil
@@ -209,6 +212,7 @@ struct AgentConfigMenu: View {
     /// Binds a model/effort choice to the menu's harness (Minor 8).
     private func choose(model: String?? = .none, effort: String?? = .none) {
         task.agentHarness = harness.rawValue
+        task.agentHarnessChosen = true
         if case let .some(model) = model { task.agentModel = model }
         if case let .some(effort) = effort { task.agentEffort = effort }
     }

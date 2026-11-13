@@ -5,10 +5,10 @@ import SwiftData
 /// sibling lists, expands a task's new parent and unpins tasks that become subtasks.
 @MainActor
 enum TaskMover {
-    /// All non-archived tasks, in the same order the list shows them.
+    /// All tasks not archived and not in Trash, in the same order the list shows them.
     private static func activeTasks(in context: ModelContext) -> [BunnyTask] {
         let descriptor = FetchDescriptor<BunnyTask>(
-            predicate: #Predicate { $0.archivedAt == nil },
+            predicate: #Predicate { $0.archivedAt == nil && $0.deletedAt == nil },
             sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]
         )
         return (try? context.fetch(descriptor)) ?? []

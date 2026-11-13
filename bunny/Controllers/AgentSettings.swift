@@ -40,7 +40,7 @@ enum AgentSettings {
     }
 
     static var autonomy: AgentAutonomy {
-        get { defaults.string(forKey: Key.autonomy).flatMap(AgentAutonomy.init(rawValue:)) ?? .autonomous }
+        get { defaults.string(forKey: Key.autonomy).flatMap(AgentAutonomy.init(rawValue:)) ?? .askFirst }
         set { defaults.set(newValue.rawValue, forKey: Key.autonomy) }
     }
 
@@ -49,10 +49,23 @@ enum AgentSettings {
         set { defaults.set(newValue.rawValue, forKey: Key.openIn) }
     }
 
+    /// An empty folder of Bunny's own, for hand-offs that need no project. Created on first use.
+    static var bunnyFolder: String {
+        let url = URL.applicationSupportDirectory.appending(path: "Bunny/Workspaces/Default", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url.path
+    }
+
+    /// An agent never works in the home folder itself: it could read and change everything the user owns.
+    static func notHome(_ path: String) -> String {
+        let home = URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL.path
+        return URL(fileURLWithPath: path).standardizedFileURL.path == home ? bunnyFolder : path
+    }
+
     static var defaultWorkspace: String {
         get {
             let stored = defaults.string(forKey: Key.defaultWorkspace)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return stored.isEmpty ? NSHomeDirectory() : (stored as NSString).expandingTildeInPath
+            return notHome(stored.isEmpty ? bunnyFolder : (stored as NSString).expandingTildeInPath)
         }
         set { defaults.set(newValue, forKey: Key.defaultWorkspace) }
     }
@@ -99,6 +112,8 @@ enum AgentSettings {
         RunSettingsResolver.resolve(
             requestedHarness: requestedHarness,
             taskHarness: task.agentHarness,
+            harnessIsChosen: task.agentHarnessChosen,
+            hasSession: task.agentSessionID != nil,
             taskModel: task.agentModel,
             taskEffort: task.agentEffort,
             defaultHarness: defaultHarness,

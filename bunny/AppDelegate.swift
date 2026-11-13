@@ -47,7 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     // MARK: - UNUserNotificationCenterDelegate
 
-    /// Show banners even while Bunny is the active app (e.g. the popover is open).
+    /// Show banners even while Bunny is the active app (e.g. the window is open).
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         completionHandler([.banner, .sound])
     }
 
-    /// Tapping an agent notification opens the popover and that task's panel.
+    /// Tapping an agent notification opens the window on that note.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -66,8 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         completionHandler()
         guard let taskID else { return }
         Task { @MainActor in
-            self.statusBarController.openPopover()
-            PanelCoordinator.shared.open(taskID)
+            self.statusBarController.openWindow(showing: taskID)
         }
     }
 }

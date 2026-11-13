@@ -18,7 +18,9 @@ struct TaskRowView: View {
     @State private var editTitle = ""
     @State private var isFileTargeted = false
     @State private var isHovered = false
-    @State private var dropIndicator: DropZone? = nil
+    private var dropIndicator: DropZone? {
+        coordinator.dropIndicator.flatMap { $0.taskID == task.id ? $0.zone : nil }
+    }
     @State private var rowHeight: CGFloat = 0
     @FocusState private var titleFocused: Bool
 
@@ -54,7 +56,7 @@ struct TaskRowView: View {
             }
             .buttonStyle(.plain)
 
-            // Title — tap once to edit when already selected, double-click otherwise
+            // Title: a click opens the note at once; a double-click renames in place.
             if isEditing {
                 TextField("", text: $editTitle)
                     .textFieldStyle(.plain)
@@ -68,7 +70,7 @@ struct TaskRowView: View {
             } else {
                 HStack(spacing: 4) {
                     titleLabel
-                        .highPriorityGesture(TapGesture(count: 2).onEnded { startEditing() })
+                        .onTapGesture { clicked(onTitle: true) }
                     if !task.taskDescription.isEmpty {
                         Image(systemName: "text.alignleft").font(.system(size: 10)).foregroundStyle(.tertiary)
                     }
@@ -126,22 +128,14 @@ struct TaskRowView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
+        // Inside the hover and tap modifiers, so its overlay view counts as part of the row.
+        .appKitContextMenu { contextMenuItems }
         .animation(.easeOut(duration: 0.15), value: isHovered)
-        .onHover { inside in
-            isHovered = inside
-            inside ? coordinator.rowEntered(task.id) : coordinator.rowExited(task.id)
-        }
-        .onTapGesture { coordinator.rowClicked(task.id) }
+        .onHover { isHovered = $0 }
+        .onTapGesture { clicked(onTitle: false) }
         .overlay { dropIndicatorView }
         .background {
-            ConcentricRectangle()
-                .fill(
-                    isFileTargeted
-                        ? AnyShapeStyle(Color.accentColor.opacity(0.12))
-                        : (isHovered || coordinator.shownTaskID == task.id
-                            ? AnyShapeStyle(.quaternary.opacity(0.7))
-                            : AnyShapeStyle(.clear))
-                )
+            ConcentricRectangle().fill(rowBackground)
         }
         // Drag & drop live on the full-width row: the subtask indent and a 1 pt strip above and
         // below (the list's inter-row gap) are part of the drop target, so there are no dead zones.
@@ -162,13 +156,58 @@ struct TaskRowView: View {
             expandedWithChildren: !task.isSubtask && task.isExpanded && hasSubtasks,
             context: modelContext,
             coordinator: coordinator,
-            indicator: $dropIndicator,
             isFileTargeted: $isFileTargeted
         ))
         .onAppear {
             if appState.editingTaskID == task.id {
                 appState.editingTaskID = nil
                 startEditing()
+            }
+        }
+    }
+
+    private var isSelected: Bool { coordinator.selection.ids.contains(task.id) }
+
+    /// File drop target, then selection (accent tint), then hover.
+    private var rowBackground: AnyShapeStyle {
+        if isFileTargeted { return AnyShapeStyle(Color.accentColor.opacity(0.12)) }
+        if isSelected { return AnyShapeStyle(Color.accentColor.opacity(0.2)) }
+        if isHovered { return AnyShapeStyle(.quaternary.opacity(0.7)) }
+        return AnyShapeStyle(.clear)
+    }
+
+    // MARK: - Context menu
+
+    /// On a row inside a multi-selection: actions on the whole selection. Otherwise actions on this row;
+    /// a right-click never changes the selection.
+    @MenuBuilder
+    private var contextMenuItems: [MenuEntry] {
+        let selection = coordinator.selection.ids
+        if selection.count > 1 && selection.contains(task.id) {
+            MenuEntry.item("Complete") { TaskActions.complete(selection, in: modelContext) }
+            MenuEntry.item("Archive", image: "archivebox") { TaskActions.archive(selection, in: modelContext) }
+            MenuEntry.separator
+            MenuEntry.item("Delete", image: "trash", destructive: true) {
+                TaskActions.moveToTrash(selection, in: modelContext)
+            }
+        } else {
+            MenuEntry.item("Edit Title") { startEditing() }
+            if !task.isSubtask {
+                MenuEntry.item("Add Subtask") { addSubtask() }
+                MenuEntry.item(task.isPinned ? "Remove from Menu Bar" : "Show in Menu Bar") { togglePin() }
+                // The picker is a popover on the timer button; open it once the menu has closed.
+                MenuEntry.item("Set Timer…") { DispatchQueue.main.async { showTimerPicker = true } }
+                if task.agentSessionID == nil && !task.runState.isActive {
+                    MenuEntry.item("Hand Off to \(AgentSettings.runSettings(for: task).harness.displayName)") {
+                        AgentSupervisor.shared.primaryAction(for: task)
+                    }
+                }
+            }
+            MenuEntry.separator
+            MenuEntry.item("Archive", image: "archivebox") { archiveTask() }
+            MenuEntry.separator
+            MenuEntry.item("Delete", image: "trash", destructive: true) {
+                TaskActions.moveToTrash([task.id], in: modelContext)
             }
         }
     }
@@ -295,9 +334,26 @@ struct TaskRowView: View {
         .popover(isPresented: $showTimerPicker, arrowEdge: .bottom) {
             TimerPickerView(task: task)
         }
+        // The picker takes key; tell the window not to close underneath it.
+        .onChange(of: showTimerPicker) { _, shown in coordinator.setTimerPickerShown(shown) }
+        .onDisappear { if showTimerPicker { coordinator.setTimerPickerShown(false) } }
     }
 
     // MARK: - Editing
+
+    /// Single-tap gestures only, so nothing waits to rule out a double-click. Each click of a
+    /// double-click arrives here: the first selects (⌘ toggles, shift extends), the second (click
+    /// count 2) renames when it lands on the title and is otherwise ignored, so it doesn't toggle
+    /// the note closed.
+    private func clicked(onTitle: Bool) {
+        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+            if onTitle { startEditing() }
+        } else {
+            // Leave any text field so the list's keyboard shortcuts apply to the new selection.
+            NSApp.keyWindow?.makeFirstResponder(nil)
+            coordinator.rowClicked(task.id)
+        }
+    }
 
     private func startEditing() {
         editTitle = task.title
@@ -312,30 +368,30 @@ struct TaskRowView: View {
         if !trimmed.isEmpty {
             task.title = trimmed
         } else if task.title.isEmpty {
-            AgentSupervisor.shared.taskWillArchiveOrDelete(task.id)
-            ShelfService.removeAll(for: task.id, in: modelContext)
-            modelContext.delete(task)
+            deleteUntitled()
         }
         isEditing = false
     }
 
     private func cancelEdit() {
         if task.title.isEmpty {
-            AgentSupervisor.shared.taskWillArchiveOrDelete(task.id)
-            ShelfService.removeAll(for: task.id, in: modelContext)
-            modelContext.delete(task)
+            deleteUntitled()
         }
         isEditing = false
+    }
+
+    /// A new note or subtask left without a title is dropped.
+    private func deleteUntitled() {
+        coordinator.tasksRemoved([task.id])
+        AgentSupervisor.shared.taskWillArchiveOrDelete(task.id)
+        ShelfService.removeAll(for: task.id, in: modelContext)
+        modelContext.delete(task)
     }
 
     // MARK: - Actions
 
     private func toggleComplete() {
-        task.isCompleted.toggle()
-        task.completedAt = task.isCompleted ? Date() : nil
-        if !task.isCompleted {
-            task.completedByAgent = false
-        }
+        TaskActions.setCompleted(task, !task.isCompleted)
     }
 
     private func togglePin() {
@@ -364,27 +420,6 @@ struct TaskRowView: View {
     }
 
     private func archiveTask() {
-        // The row is about to vanish without a hover exit; release it so the panel can hide.
-        coordinator.rowExited(task.id)
-        AgentSupervisor.shared.taskWillArchiveOrDelete(task.id)
-        task.archivedAt = Date()
-        if task.isPinned {
-            task.isPinned = false
-            appState.pinnedTaskID = nil
-            appState.timerExpiredTaskID = nil
-        }
-        // Archive all subtasks so they don't become orphans
-        if !task.isSubtask {
-            let parentID = task.id
-            let descriptor = FetchDescriptor<BunnyTask>(
-                predicate: #Predicate { $0.parentID == parentID }
-            )
-            if let subtasks = try? modelContext.fetch(descriptor) {
-                for sub in subtasks {
-                    AgentSupervisor.shared.taskWillArchiveOrDelete(sub.id)
-                    sub.archivedAt = task.archivedAt
-                }
-            }
-        }
+        TaskActions.archive([task.id], in: modelContext)
     }
 }

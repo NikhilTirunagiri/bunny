@@ -14,9 +14,29 @@ enum TaskDrag {
     static var currentID: UUID?
     fileprivate static var hint: (dragged: UUID, target: UUID, zone: DropZone, effective: DropZone?)?
 
-    /// The task exists and isn't archived.
+    private static var watchingForEnd = false
+
+    /// SwiftUI may still send a row `dropUpdated` after the drop, and sends nothing when a drag is
+    /// cancelled, so the insertion line is cleared when the mouse button comes up, whatever happened.
+    fileprivate static func clearIndicatorWhenDragEnds(_ coordinator: PanelCoordinator) {
+        guard !watchingForEnd else { return }
+        watchingForEnd = true
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+            MainActor.assumeIsolated {
+                guard NSEvent.pressedMouseButtons & 1 == 0 else { return }
+                timer.invalidate()
+                watchingForEnd = false
+                // After the drop's own late callbacks have run.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    if NSEvent.pressedMouseButtons & 1 == 0 { coordinator.dropIndicator = nil }
+                }
+            }
+        }
+    }
+
+    /// The task exists and isn't archived or in Trash.
     fileprivate static func isLive(_ id: UUID, in context: ModelContext) -> Bool {
-        let descriptor = FetchDescriptor<BunnyTask>(predicate: #Predicate { $0.id == id && $0.archivedAt == nil })
+        let descriptor = FetchDescriptor<BunnyTask>(predicate: #Predicate { $0.id == id && $0.archivedAt == nil && $0.deletedAt == nil })
         return ((try? context.fetchCount(descriptor)) ?? 0) > 0
     }
 }
@@ -30,7 +50,6 @@ struct RowDropDelegate: DropDelegate {
     let expandedWithChildren: Bool
     let context: ModelContext
     let coordinator: PanelCoordinator
-    @Binding var indicator: DropZone?
     @Binding var isFileTargeted: Bool
 
     private func isFileDrag(_ info: DropInfo) -> Bool {
@@ -46,7 +65,7 @@ struct RowDropDelegate: DropDelegate {
     func dropEntered(info: DropInfo) {
         if isFileDrag(info) {
             isFileTargeted = true
-            coordinator.fileDragEntered(taskID)
+            coordinator.open(taskID)
         } else {
             _ = update(info)
         }
@@ -65,7 +84,10 @@ struct RowDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        defer { clear() }
+        defer {
+            clear()
+            coordinator.dropIndicator = nil
+        }
         let target = taskID
         let context = context
 
@@ -118,12 +140,16 @@ struct RowDropDelegate: DropDelegate {
                 TaskDrag.hint = (dragged, taskID, zone, effective)
             }
         }
-        if indicator != effective { indicator = effective }
+        let current = coordinator.dropIndicator
+        if current?.taskID != taskID || current?.zone != effective {
+            coordinator.dropIndicator = effective.map { (taskID, $0) }
+        }
+        TaskDrag.clearIndicatorWhenDragEnds(coordinator)
         return DropProposal(operation: effective == nil ? .forbidden : .move)
     }
 
     private func clear() {
-        if indicator != nil { indicator = nil }
+        if coordinator.dropIndicator?.taskID == taskID { coordinator.dropIndicator = nil }
         if isFileTargeted { isFileTargeted = false }
         TaskDrag.hint = nil
     }

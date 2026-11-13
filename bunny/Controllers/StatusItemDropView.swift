@@ -1,6 +1,6 @@
 import AppKit
 
-/// Transparent view covering the status item button. A file dragged onto the menu bar icon opens the popover
+/// Transparent view covering the status item button. A file dragged onto the menu bar icon opens the window
 /// so the drag can continue onto a task. Clicks are forwarded to the button's normal action.
 final class StatusItemDropView: NSView {
     var onDragEntered: (() -> Void)?

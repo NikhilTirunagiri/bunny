@@ -130,12 +130,14 @@ final class AgentSupervisor {
 
     // MARK: - Actions
 
-    /// No session yet → start with the task's resolved harness; otherwise open the session (never a duplicate run).
+    /// The row's agent button and the Hand Off menu item. No session yet → start a background run with the
+    /// task's resolved harness; otherwise show the note so its agent section is visible. Never opens an
+    /// external app (only `openSession`, from the note side or "Open Session in …", does) and never a duplicate run.
     func primaryAction(for task: BunnyTask) {
         if task.agentSessionID == nil && !task.runState.isActive {
             start(task, harness: nil)
         } else {
-            openSession(task)
+            PanelCoordinator.shared.open(task.id)
         }
     }
 
@@ -256,11 +258,10 @@ final class AgentSupervisor {
 
     func openSession(_ task: BunnyTask) {
         guard let sessionID = task.agentSessionID else {
+            // Nothing to open, and opening never starts a run.
             if task.runState.isActive {
-                // Running but the CLI hasn't reported its session yet: nothing to open, and never a second run.
+                // Running but the CLI hasn't reported its session yet.
                 task.agentActivity = "Still starting…"
-            } else {
-                start(task, harness: nil)
             }
             return
         }
@@ -298,6 +299,7 @@ final class AgentSupervisor {
         wrapUps[task.id] = nil
         briefSubtaskIDs[task.id] = nil
         task.agentHarness = nil
+        task.agentHarnessChosen = false
         task.runState = .idle
         task.agentSessionID = nil
         task.agentWorkingDirectory = nil
@@ -493,6 +495,9 @@ final class AgentSupervisor {
         }
 
         var resolved = WorkingDirectoryResolver.resolve(shelf: shelf, defaultWorkspace: AgentSettings.defaultWorkspace)
+        // A file attached straight from the home folder must not make the home folder the workspace.
+        resolved.cwd = AgentSettings.notHome(resolved.cwd)
+        resolved.extra.removeAll { AgentSettings.notHome($0) != $0 }
         if let workingDirectory, !workingDirectory.isEmpty {
             resolved.cwd = workingDirectory
             resolved.extra.removeAll { $0 == workingDirectory }
@@ -514,7 +519,7 @@ final class AgentSupervisor {
         guard let context else { return [] }
         let parentID: UUID? = task.id
         let descriptor = FetchDescriptor<BunnyTask>(
-            predicate: #Predicate { $0.parentID == parentID && $0.archivedAt == nil },
+            predicate: #Predicate { $0.parentID == parentID && $0.archivedAt == nil && $0.deletedAt == nil },
             sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]
         )
         return (try? context.fetch(descriptor)) ?? []
@@ -578,6 +583,7 @@ final class AgentSupervisor {
             task.runState = .failed
             task.agentSummary = message
             task.agentQuestionData = nil
+            task.agentActivity = ""
             task.agentFinishedAt = Date()
             runners[taskID] = nil
             retire(runner, interruptFirst: false)
@@ -588,6 +594,7 @@ final class AgentSupervisor {
             if task.runState == .running {
                 task.runState = .failed
                 task.agentSummary = "Agent exited unexpectedly"
+                task.agentActivity = ""
                 task.agentFinishedAt = Date()
             }
             // needsInput stays: with no live runner, answering resumes the session.
@@ -615,6 +622,7 @@ final class AgentSupervisor {
             task.runState = .failed
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             task.agentSummary = trimmed.isEmpty ? "The agent's turn failed" : trimmed
+            task.agentActivity = ""
         }
         task.agentFinishedAt = now
         task.agentQuestionData = nil
@@ -708,7 +716,7 @@ final class AgentSupervisor {
         guard let context else { return }
         let needsInput = AgentRunState.needsInput.rawValue
         let descriptor = FetchDescriptor<BunnyTask>(
-            predicate: #Predicate { $0.agentState == needsInput && $0.archivedAt == nil }
+            predicate: #Predicate { $0.agentState == needsInput && $0.archivedAt == nil && $0.deletedAt == nil }
         )
         let count = (try? context.fetchCount(descriptor)) ?? attentionCount
         if count != attentionCount {

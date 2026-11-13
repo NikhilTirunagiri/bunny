@@ -1,186 +1,123 @@
 import SwiftUI
 import SwiftData
 
+/// Replaces the notes list: a back button and two tabs, Archive and Trash. Each tab brings its own
+/// selection and bottom bar.
 struct ArchiveView: View {
-    @Query(sort: [SortDescriptor(\BunnyTask.archivedAt, order: .reverse)])
-    private var allArchivedTasks: [BunnyTask]
+    let onBack: () -> Void
 
-    @State private var expandedIDs: Set<UUID> = []
-    @State private var hovered: UUID? = nil
+    @Environment(PanelCoordinator.self) private var coordinator
+    @State private var tab: Tab = .archive
 
-    private var archivedParents: [BunnyTask] {
-        let archivedParentIDs = Set(allArchivedTasks.filter { $0.parentID == nil }.map { $0.id })
-        return allArchivedTasks.filter {
-            $0.parentID == nil || $0.parentID.map { !archivedParentIDs.contains($0) } == true
-        }
-    }
-
-    private func subtasks(of task: BunnyTask) -> [BunnyTask] {
-        allArchivedTasks.filter { $0.parentID == task.id }
-    }
-
-    private static let dayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .none
-        return f
-    }()
-
-    private var grouped: [(key: String, date: Date, tasks: [BunnyTask])] {
-        var dict: [String: (date: Date, tasks: [BunnyTask])] = [:]
-        for task in archivedParents {
-            guard let archived = task.archivedAt else { continue }
-            let key = Self.dayFormatter.string(from: archived)
-            if dict[key] == nil {
-                dict[key] = (date: archived, tasks: [])
-            }
-            dict[key]!.tasks.append(task)
-        }
-        return dict
-            .map { (key: $0.key, date: $0.value.date, tasks: $0.value.tasks) }
-            .sorted { $0.date > $1.date }
-    }
+    private enum Tab: Hashable { case archive, trash }
 
     var body: some View {
-        Group {
-            if archivedParents.isEmpty {
-                emptyState
-            } else {
-                archiveList
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Back to notes")
+
+                Picker("", selection: $tab) {
+                    Text("Archive").tag(Tab.archive)
+                    Text("Trash").tag(Tab.trash)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            switch tab {
+            case .archive: ArchiveTabView()
+            case .trash: TrashTabView()
             }
         }
-        .frame(minHeight: 360)
+        .overlay {
+            if let confirmation = coordinator.deleteConfirmation {
+                DeleteConfirmationView(confirmation: confirmation)
+            }
+        }
+    }
+}
+
+// MARK: - Shared pieces
+
+/// Selection handling for the Archive and Trash lists (same rules as the notes list).
+struct ListSelection {
+    var selection = SelectionModel.Selection()
+
+    var ids: Set<UUID> { selection.ids }
+
+    mutating func click(_ id: UUID, visible: [UUID]) {
+        selection = SelectionModel.apply(PanelCoordinator.clickInput(id), to: selection, visible: visible)
     }
 
-    private var emptyState: some View {
+    /// Drops ids that left the list.
+    mutating func prune(visible: [UUID]) {
+        let gone = selection.ids.subtracting(visible)
+        if !gone.isEmpty { selection = SelectionModel.apply(.removed(gone), to: selection, visible: visible) }
+    }
+
+    /// A context menu on a row inside a multi-selection acts on the selection, otherwise on the row.
+    func targets(for id: UUID) -> Set<UUID> {
+        ids.count > 1 && ids.contains(id) ? ids : [id]
+    }
+}
+
+/// Bottom bar of the Archive and Trash tabs: a caption on the left, actions on the right.
+struct ArchiveBottomBar<Actions: View>: View {
+    let caption: String
+    @ViewBuilder let actions: Actions
+
+    var body: some View {
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 6) {
+                Text(caption)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                actions
+            }
+            .buttonStyle(.glass)
+            .padding(.horizontal, 14)
+        }
+        .frame(height: 44)
+    }
+}
+
+/// Row background shared by the Archive and Trash lists: selection (accent tint), then hover.
+func archiveRowBackground(selected: Bool, hovered: Bool) -> AnyShapeStyle {
+    if selected { return AnyShapeStyle(Color.accentColor.opacity(0.2)) }
+    if hovered { return AnyShapeStyle(.quaternary.opacity(0.7)) }
+    return AnyShapeStyle(.clear)
+}
+
+/// Empty state of the Archive and Trash lists.
+struct ArchiveEmptyState: View {
+    let systemImage: String
+    let text: String
+
+    var body: some View {
         VStack(spacing: 8) {
             Spacer()
-            Image(systemName: "archivebox")
+            Image(systemName: systemImage)
                 .font(.system(size: 28))
                 .foregroundStyle(.tertiary)
-            Text("No archived tasks")
+            Text(text)
                 .font(.callout)
                 .foregroundStyle(.tertiary)
             Spacer()
         }
-    }
-
-    private var archiveList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
-                ForEach(grouped, id: \.key) { group in
-                    Section {
-                        ForEach(group.tasks) { task in
-                            let subs = subtasks(of: task)
-                            let isExpanded = expandedIDs.contains(task.id)
-
-                            parentRow(task: task, subs: subs, isExpanded: isExpanded)
-
-                            if isExpanded {
-                                ForEach(subs) { sub in
-                                    subtaskRow(sub)
-                                }
-                            }
-                        }
-                    } header: {
-                        Text(group.key)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 16)
-                            .padding(.top, 10)
-                            .padding(.bottom, 5)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
-            .padding(.vertical, 4)
-        }
-    }
-
-    private func parentRow(task: BunnyTask, subs: [BunnyTask], isExpanded: Bool) -> some View {
-        HStack(spacing: 6) {
-            Button {
-                if isExpanded { expandedIDs.remove(task.id) }
-                else { expandedIDs.insert(task.id) }
-            } label: {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(subs.isEmpty ? AnyShapeStyle(Color.clear) : AnyShapeStyle(Color.secondary))
-            }
-            .buttonStyle(.plain)
-            .frame(width: 12)
-            .disabled(subs.isEmpty)
-
-            Button { restore(task, subs: subs) } label: {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 17))
-                    .foregroundStyle(.tertiary)
-            }
-            .buttonStyle(.plain)
-            .help("Uncheck to restore")
-
-            Text(task.title)
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-                .strikethrough(true, color: .secondary)
-                .lineLimit(1)
-
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .contentShape(Rectangle())
-        .background {
-            ConcentricRectangle()
-                .fill(hovered == task.id ? AnyShapeStyle(.quaternary.opacity(0.7)) : AnyShapeStyle(.clear))
-        }
-        .onHover { isHovering in
-            hovered = isHovering ? task.id : (hovered == task.id ? nil : hovered)
-        }
-    }
-
-    private func subtaskRow(_ task: BunnyTask) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 14))
-                .foregroundStyle(.tertiary)
-            Text(task.title)
-                .font(.system(size: 13))
-                .foregroundStyle(.tertiary)
-                .strikethrough(true, color: Color.secondary.opacity(0.5))
-                .lineLimit(1)
-            Spacer()
-        }
-        .padding(.leading, 36)
-        .padding(.trailing, 12)
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .background {
-            ConcentricRectangle()
-                .fill(hovered == task.id ? AnyShapeStyle(.quaternary.opacity(0.7)) : AnyShapeStyle(.clear))
-        }
-        .onHover { isHovering in
-            hovered = isHovering ? task.id : (hovered == task.id ? nil : hovered)
-        }
-    }
-
-    private func restore(_ task: BunnyTask, subs: [BunnyTask]) {
-        // A restored task starts fresh: no stale run state, question or session from before archiving.
-        for t in [task] + subs {
-            if t.runState.isActive { AgentSupervisor.shared.stop(t) }   // e.g. archived while needsInput
-            AgentSupervisor.shared.clear(t)
-        }
-        task.archivedAt = nil
-        task.isCompleted = false
-        task.completedAt = nil
-        task.completedByAgent = false
-        if task.isTimerExpired { task.timerStartedAt = nil }
-        for sub in subs {
-            sub.archivedAt = nil
-            sub.isCompleted = false
-            sub.completedAt = nil
-            sub.completedByAgent = false
-            if sub.isTimerExpired { sub.timerStartedAt = nil }
-        }
+        .frame(maxWidth: .infinity)
     }
 }

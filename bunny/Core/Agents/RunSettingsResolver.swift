@@ -11,8 +11,9 @@ struct RunSettings: Equatable {
 
 /// Single source of truth for what a task's next run uses. Pure: every input is passed in.
 ///
-/// - Harness: `requestedHarness` (an explicit choice for this run), else the task's chosen harness,
-///   else Settings' default.
+/// - Harness: `requestedHarness` (an explicit choice for this run), else the task's harness when it was
+///   chosen in the agent menu (`harnessIsChosen`) or its session belongs to it (`hasSession`), else
+///   Settings' default. A harness merely recorded by a past run does not outrank Settings.
 /// - Model/effort: the task's override, but only when it was chosen for the resolved harness
 ///   (`taskHarness == harness`); otherwise Settings' value for that harness. Blank values mean
 ///   "the CLI's default" and resolve to nil.
@@ -20,6 +21,8 @@ enum RunSettingsResolver {
     static func resolve(
         requestedHarness: AgentHarness? = nil,
         taskHarness: String?,
+        harnessIsChosen: Bool,
+        hasSession: Bool,
         taskModel: String?,
         taskEffort: String?,
         defaultHarness: AgentHarness,
@@ -27,7 +30,8 @@ enum RunSettingsResolver {
         settingsEffort: (AgentHarness) -> String
     ) -> RunSettings {
         let chosenHarness = taskHarness.flatMap(AgentHarness.init(rawValue:))
-        let harness = requestedHarness ?? chosenHarness ?? defaultHarness
+        let binding = harnessIsChosen || hasSession ? chosenHarness : nil
+        let harness = requestedHarness ?? binding ?? defaultHarness
         let overridesApply = chosenHarness == harness
         let model = (overridesApply ? AgentRunnerText.nonEmpty(taskModel) : nil)
             ?? AgentRunnerText.nonEmpty(settingsModel(harness))

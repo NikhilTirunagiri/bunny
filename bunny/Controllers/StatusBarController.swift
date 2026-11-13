@@ -1,17 +1,13 @@
 import AppKit
-import SwiftUI
 import SwiftData
 import UserNotifications
 
 @MainActor
-final class StatusBarController: NSObject, NSPopoverDelegate {
+final class StatusBarController: NSObject {
     private var statusItem: NSStatusItem!
-    private(set) var popover: NSPopover!
     private var updateTimer: Timer?
     private var modelContext: ModelContext?
-    private var panelController: TaskPanelController!
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
+    private var windowController: MainWindowController?
 
     private static let monoFont = NSFont.monospacedDigitSystemFont(
         ofSize: NSFont.systemFontSize,
@@ -59,35 +55,20 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         modelContext = modelContainer.mainContext
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem.button {
-            button.image = Self.menuBarIcon
-            button.imagePosition = .imageOnly
-            button.action = #selector(togglePopover)
-            button.target = self
+        guard let button = statusItem.button else { return }
+        button.image = Self.menuBarIcon
+        button.imagePosition = .imageOnly
+        button.action = #selector(toggleWindow)
+        button.target = self
 
-            let dropView = StatusItemDropView(frame: button.bounds)
-            dropView.onDragEntered = { [weak self] in self?.openPopover() }
-            dropView.onClick = { [weak self] in self?.togglePopover() }
-            button.addSubview(dropView)
-        }
+        let dropView = StatusItemDropView(frame: button.bounds)
+        dropView.onDragEntered = { [weak self] in self?.openWindow() }
+        dropView.onClick = { [weak self] in self?.toggleWindow() }
+        button.addSubview(dropView)
 
-        popover = NSPopover()
-        popover.contentSize = NSSize(width: 340, height: 480)
-        // Closed explicitly (global click monitor, Esc, status item) so clicks in the side panel don't dismiss it.
-        popover.behavior = .applicationDefined
-        popover.delegate = self
-        popover.contentViewController = NSHostingController(
-            rootView: ContentView()
-                .modelContainer(modelContainer)
-                .environment(AppState.shared)
-                .environment(TimerManager.shared)
-                .environment(PanelCoordinator.shared)
-        )
-
-        panelController = TaskPanelController(modelContainer: modelContainer)
-        PanelCoordinator.shared.onClosePopover = { [weak self] in self?.closePopover() }
-        WindowManager.shared.onWillShowWindow = { [weak self] in self?.closePopover() }
-        WindowManager.shared.onFinishOnboarding = { [weak self] in self?.openPopover() }
+        windowController = MainWindowController(modelContainer: modelContainer, statusButton: button)
+        WindowManager.shared.onWillShowWindow = { [weak self] in self?.closeWindow() }
+        WindowManager.shared.onFinishOnboarding = { [weak self] in self?.openWindow() }
 
         restorePinnedTask()
         startUpdateTimer()
@@ -97,7 +78,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         guard let context = modelContext else { return }
         let descriptor = FetchDescriptor<BunnyTask>()
         guard let all = try? context.fetch(descriptor) else { return }
-        if let pinned = all.first(where: { $0.isPinned && $0.archivedAt == nil }) {
+        if let pinned = all.first(where: { $0.isPinned && $0.archivedAt == nil && $0.deletedAt == nil }) {
             AppState.shared.pinnedTaskID = pinned.id
         }
     }
@@ -112,70 +93,21 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         updateTimer = t
     }
 
-    @objc func togglePopover() {
-        popover.isShown ? closePopover() : openPopover()
+    @objc func toggleWindow() {
+        windowController?.toggle()
     }
 
-    func openPopover() {
-        guard !popover.isShown, let button = statusItem.button else { return }
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        if let contentView = popover.contentViewController?.view, let window = contentView.window {
-            window.makeKey()
-            panelController.attach(to: window, contentView: contentView)
-        }
-        installMonitors()
+    func openWindow() {
+        windowController?.openWindow()
     }
 
-    func closePopover() {
-        guard popover.isShown else { return }
-        popover.performClose(nil)
+    /// Opens the window on one note (agent notification).
+    func openWindow(showing taskID: UUID) {
+        windowController?.openWindow(showing: taskID)
     }
 
-    // MARK: - NSPopoverDelegate
-
-    func popoverWillClose(_ notification: Notification) {
-        // Hide the side panel as soon as closing starts, not after the popover's fade-out.
-        panelController.hide()
-    }
-
-    func popoverDidClose(_ notification: Notification) {
-        removeMonitors()
-        PanelCoordinator.shared.popoverClosed()
-        panelController.hide()
-    }
-
-    // MARK: - Event monitors
-
-    private func installMonitors() {
-        removeMonitors()
-        // Clicks in other apps close the popover (mouse-down global monitors need no Accessibility permission).
-        // Clicks on our own status item are delivered to this app, so the global monitor doesn't see them.
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.closePopover()
-            }
-        }
-        // Esc in the popover or side panel: unlock the panel, then close. Other windows (e.g. the timer-picker
-        // popover) keep their own Esc; a text view actively in use (text or IME composition) gets Esc too.
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            let consumed = MainActor.assumeIsolated { () -> Bool in
-                guard let self, event.keyCode == 53, let window = event.window,
-                      window === self.popover.contentViewController?.view.window
-                        || window === self.panelController.window else { return false }
-                if let tv = window.firstResponder as? NSTextView, tv.hasMarkedText() || !tv.string.isEmpty {
-                    return false
-                }
-                PanelCoordinator.shared.escape()
-                return true
-            }
-            return consumed ? nil : event
-        }
-    }
-
-    private func removeMonitors() {
-        if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
-        if let m = localMonitor { NSEvent.removeMonitor(m); localMonitor = nil }
+    func closeWindow() {
+        windowController?.closeWindow()
     }
 
     func updateMenuBarItem() {
@@ -188,7 +120,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
         let descriptor = FetchDescriptor<BunnyTask>()
         guard let all = try? context.fetch(descriptor),
-              let task = all.first(where: { $0.id == pinnedID && $0.archivedAt == nil }) else {
+              let task = all.first(where: { $0.id == pinnedID && $0.archivedAt == nil && $0.deletedAt == nil }) else {
             AppState.shared.pinnedTaskID = nil
             setDefault(button)
             return

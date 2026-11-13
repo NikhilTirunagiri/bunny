@@ -14,11 +14,14 @@ final class BunnyTask {
     var isExpanded: Bool = true
     var parentID: UUID? = nil
     var archivedAt: Date? = nil
+    var deletedAt: Date? = nil
     var createdAt: Date = Date()
     var sortOrder: Int = 0
 
     // Agent handoff (spec §4). Raw values keep the store schema plain; use the computed accessors below.
     var agentHarness: String? = nil
+    /// `agentHarness` was picked in the agent menu (outranks Settings' default); otherwise it only records the last run.
+    var agentHarnessChosen: Bool = false
     var agentState: String = "idle"
     var agentSessionID: String? = nil
     var agentWorkingDirectory: String? = nil
@@ -39,6 +42,9 @@ final class BunnyTask {
     }
 
     var isArchived: Bool { archivedAt != nil }
+    var isInTrash: Bool { deletedAt != nil }
+    /// In the notes list: neither archived nor in Trash.
+    var isLive: Bool { archivedAt == nil && deletedAt == nil }
     var isSubtask: Bool { parentID != nil }
     var hasTimer: Bool { timerDuration != nil }
 

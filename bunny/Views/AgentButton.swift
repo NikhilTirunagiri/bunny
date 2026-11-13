@@ -6,7 +6,8 @@ extension Color {
 }
 
 /// The agent handoff button shown on parent-task rows: hands off to the default (or task's chosen)
-/// harness, or opens the live/last session, and offers the full agent config menu on right-click.
+/// harness in the background, or shows the note's agent section once there is a run or session, and
+/// offers the full agent config menu and "Open Session in …" on right-click.
 struct AgentButton: View {
     @Bindable var task: BunnyTask
 
@@ -28,10 +29,11 @@ struct AgentButton: View {
         }
     }
 
-    /// "Hand off to <harness> · <model> · <effort>" before a session exists, else the open-session hint.
+    /// "Hand off to <harness> · <model> · <effort>" before a run or session exists, else "Show agent".
     private var tooltip: String {
-        guard task.agentSessionID == nil else {
-            return "Open session in \(AgentSettings.openIn.displayName). \(Self.sessionToolsNote)"
+        guard task.agentSessionID == nil && !task.runState.isActive else {
+            guard task.agentSessionID != nil else { return "Show agent" }
+            return "Show agent. Right-click to open the session in \(AgentSettings.openIn.displayName)."
         }
         return "Hand off to \(RunSettingsResolver.caption(runSettings))"
     }
