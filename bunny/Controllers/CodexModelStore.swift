@@ -2,8 +2,9 @@ import Foundation
 import Observation
 
 /// The Codex model list (`model/list`), shared by Settings → Agents and the per-task agent menu
-/// (spec §2, "cached in memory"). Fetched once at launch off the main thread and again whenever
-/// Settings opens; a failed refresh keeps the last good list. Empty `models` with `isLoading` false
+/// (spec §2, "cached in memory"). Fetched off the main thread when first needed (Settings → Agents
+/// shown, the Hand off options card opened, a Codex run started) and only while Codex is switched
+/// on; a failed refresh keeps the last good list. Empty `models` with `isLoading` false
 /// means the list is unavailable (codex missing, or the call failed) — Default/Custom still work.
 @MainActor
 @Observable
@@ -25,7 +26,10 @@ final class CodexModelStore {
 
     /// Re-queries the CLI (no-op while a fetch is running).
     func refresh() {
-        guard !isLoading else { return }
+        guard !isLoading, AgentEnablement.shared.isEnabled(.codex) else { return }
+        #if DEBUG
+        if SnapshotRunner.outputDirectory != nil { return }
+        #endif
         let cliPath = AgentSettings.cliPath(for: .codex)
         guard !cliPath.isEmpty, FileManager.default.isExecutableFile(atPath: cliPath) else { return }
         isLoading = true
@@ -51,6 +55,13 @@ final class CodexModelStore {
         isLoading = false
         refresh()
     }
+
+    #if DEBUG
+    /// Snapshots only: a fixed list; nothing is fetched.
+    func snapshotSet(_ models: [CodexModel]) {
+        self.models = models
+    }
+    #endif
 
     private func finish(_ fetched: [CodexModel]?, generation fetchGeneration: Int) {
         guard fetchGeneration == generation else { return }

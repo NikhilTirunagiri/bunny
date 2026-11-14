@@ -8,7 +8,7 @@ struct TaskNode: Equatable {
     var parentID: UUID?
     var sortOrder: Int
     /// False when this task must not move under a (new) parent: it has subtasks (incl.
-    /// archived ones), a timer, or an agent run or session. It can still move to the top
+    /// trashed ones), a timer, or an agent run or session. It can still move to the top
     /// level or reorder within its current parent. The rules also refuse nesting a task that
     /// has subtasks among `nodes`, whatever this flag says.
     var canNest: Bool = true
@@ -35,6 +35,15 @@ enum TaskMoveRules {
         if y < 0.3 * height { return .above }
         if y > 0.7 * height { return expandedWithChildren ? .into : .below }
         return .into
+    }
+
+    /// ⌥↑ / ⌥↓: the drop that moves `id` one place among `siblings` (the rows it may swap with, in
+    /// display order). nil at either end, or when `id` is not among them.
+    static func keyboardStep(id: UUID, up: Bool, siblings: [UUID]) -> (target: UUID, zone: DropZone)? {
+        guard let index = siblings.firstIndex(of: id) else { return nil }
+        let neighbour = up ? index - 1 : index + 1
+        guard siblings.indices.contains(neighbour) else { return nil }
+        return (siblings[neighbour], up ? .above : .below)
     }
 
     /// Effective zone after rules (into → below when not allowed). nil = no-op.

@@ -48,6 +48,30 @@ struct AgentMarkersTests {
         #expect(result.numbers == [1, 3])
     }
 
+    @Test func taskDone() {
+        let result = AgentMarkers.extractTaskDone(from: "All pages have both palettes.\n<bunny-task-done/>\n")
+        #expect(result.text == "All pages have both palettes.")
+        #expect(result.done)
+        #expect(AgentMarkers.extractTaskDone(from: "Ok. <bunny-task-done />").text == "Ok.")
+        #expect(AgentMarkers.extractTaskDone(from: "Ok.\n<bunny-task-done></bunny-task-done>") == ("Ok.", true))
+    }
+
+    @Test func taskDoneAbsent() {
+        let result = AgentMarkers.extractTaskDone(from: " I see three files. Which one? ")
+        #expect(result.text == "I see three files. Which one?")
+        #expect(!result.done)
+        #expect(!AgentMarkers.extractTaskDone(from: "<bunny-subtasks-done>1</bunny-subtasks-done>").done)
+    }
+
+    @Test func taskDoneWithSubtasks() {
+        let text = "Did it.\n<bunny-subtasks-done>2</bunny-subtasks-done>\n<bunny-task-done/>"
+        let done = AgentMarkers.extractTaskDone(from: text)
+        let subtasks = AgentMarkers.extractCompletedSubtasks(from: done.text)
+        #expect(done.done)
+        #expect(subtasks.text == "Did it.")
+        #expect(subtasks.numbers == [2])
+    }
+
     @Test func subtasksAbsent() {
         let text = "Nothing here."
         let result = AgentMarkers.extractCompletedSubtasks(from: text)

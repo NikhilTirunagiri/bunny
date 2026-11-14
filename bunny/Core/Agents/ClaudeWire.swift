@@ -2,7 +2,8 @@ import Foundation
 
 enum ClaudeWire {
     enum Incoming: Equatable {
-        case initialized(sessionID: String)
+        /// `model`: the model the CLI says the session runs on.
+        case initialized(sessionID: String, model: String?)
         case assistantText(String)
         case toolUse(name: String, summary: String)
         case permissionRequest(requestID: String, toolName: String, input: Data)
@@ -21,7 +22,7 @@ enum ClaudeWire {
                   let sessionID = object["session_id"] as? String else {
                 return .ignored
             }
-            return .initialized(sessionID: sessionID)
+            return .initialized(sessionID: sessionID, model: object["model"] as? String)
 
         case "assistant":
             guard let message = object["message"] as? [String: Any],

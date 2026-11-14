@@ -63,6 +63,10 @@ struct AgentPromptBuilderTests {
         #expect(!claude.contains("<bunny-question>"))
         #expect(claude.contains("<bunny-subtasks-done>"))
         #expect(codex.contains("<bunny-subtasks-done>"))
+        for appendix in [claude, codex] {
+            #expect(appendix.contains("When, and only when, you have finished the whole task the note describes, end your final message with <bunny-task-done/> on its own line."))
+            #expect(appendix.contains("do not add it."))
+        }
     }
 
     @Test func appendixMentionsBunnyToolsOnlyWhenAvailable() {

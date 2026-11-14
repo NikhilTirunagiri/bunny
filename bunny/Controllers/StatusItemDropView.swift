@@ -1,10 +1,12 @@
 import AppKit
 
-/// Transparent view covering the status item button. A file dragged onto the menu bar icon opens the popover
-/// so the drag can continue onto a task. Clicks are forwarded to the button's normal action.
+/// Transparent view covering the status item button. A file dragged onto the menu bar icon opens the window
+/// so the drag can continue onto a task. Clicks are forwarded: a left click to the button's normal
+/// action, a right click or control-click to the menu.
 final class StatusItemDropView: NSView {
     var onDragEntered: (() -> Void)?
     var onClick: (() -> Void)?
+    var onRightClick: (() -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -18,6 +20,9 @@ final class StatusItemDropView: NSView {
         return []     // the icon itself never accepts the drop
     }
 
-    override func mouseDown(with event: NSEvent) { onClick?() }
-    override func rightMouseDown(with event: NSEvent) { onClick?() }
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) { onRightClick?() } else { onClick?() }
+    }
+
+    override func rightMouseDown(with event: NSEvent) { onRightClick?() }
 }

@@ -209,7 +209,7 @@ struct TaskMoveRulesTests {
         }
     }
 
-    /// Same, when the subtasks are only known through `canNest` (e.g. they are archived).
+    /// Same, when the subtasks are only known through `canNest` (e.g. they are in Trash).
     @Test func parentFlaggedCannotNestAboveSubtaskIsNoOp() {
         let p = UUID(), q = UUID(), s = UUID()
         let nodes = [
@@ -301,5 +301,34 @@ struct TaskMoveRulesTests {
         #expect(TaskMoveRules.resolve(dragged: s1, target: q, zone: .into, nodes: nodes) == .below)
         // Above/below a top-level task un-nests it.
         #expect(TaskMoveRules.resolve(dragged: s1, target: q, zone: .above, nodes: nodes) == .above)
+    }
+
+    // MARK: - Keyboard reorder
+
+    @Test func keyboardStepTargetsTheNeighbour() {
+        let a = UUID(), b = UUID(), c = UUID()
+        let up = TaskMoveRules.keyboardStep(id: b, up: true, siblings: [a, b, c])
+        #expect(up?.target == a)
+        #expect(up?.zone == .above)
+        let down = TaskMoveRules.keyboardStep(id: b, up: false, siblings: [a, b, c])
+        #expect(down?.target == c)
+        #expect(down?.zone == .below)
+    }
+
+    @Test func keyboardStepStopsAtTheEnds() {
+        let a = UUID(), b = UUID()
+        #expect(TaskMoveRules.keyboardStep(id: a, up: true, siblings: [a, b]) == nil)
+        #expect(TaskMoveRules.keyboardStep(id: b, up: false, siblings: [a, b]) == nil)
+        #expect(TaskMoveRules.keyboardStep(id: UUID(), up: true, siblings: [a, b]) == nil)
+    }
+
+    @Test func keyboardStepMovesOnePlace() {
+        let a = UUID(), b = UUID(), c = UUID()
+        let nodes = [a, b, c].enumerated().map { TaskNode(id: $0.element, parentID: nil, sortOrder: $0.offset) }
+        let step = TaskMoveRules.keyboardStep(id: c, up: true, siblings: [a, b, c])!
+        let placements = TaskMoveRules.move(dragged: c, target: step.target, zone: step.zone, nodes: nodes)
+        #expect(placements.count == 2)
+        #expect(placements.contains(TaskPlacement(id: c, parentID: nil, sortOrder: 1)))
+        #expect(placements.contains(TaskPlacement(id: b, parentID: nil, sortOrder: 2)))
     }
 }

@@ -4,7 +4,8 @@ import SwiftData
 
 /// Runs Bunny tool calls (spec §5) against the SwiftData store on the main context, so agent-made
 /// changes show up in the UI right away. Only one nesting level, like the rest of Bunny: a new
-/// task's parent must be an existing top-level, non-archived task.
+/// task's parent must be an existing top-level, live task. Notes in Trash are invisible
+/// to agents: their ids count as unknown.
 @MainActor
 final class BunnyToolsBackendImpl: BunnyToolsBackend {
     private let modelContainer: ModelContainer
@@ -56,7 +57,7 @@ final class BunnyToolsBackendImpl: BunnyToolsBackend {
     private func createTasks(_ newTasks: [NewTask], parentID: UUID?) -> Result<[[String: Any]], BunnyToolError> {
         var parent: BunnyTask?
         if let parentID {
-            guard let found = task(with: parentID), !found.isArchived else {
+            guard let found = task(with: parentID), found.isLive else {
                 return .failure(BunnyToolError(message: "No task with id \(parentID.uuidString)"))
             }
             guard found.parentID == nil else {
@@ -152,10 +153,10 @@ final class BunnyToolsBackendImpl: BunnyToolsBackend {
 
     // MARK: - Store
 
-    /// Non-archived tasks in list order.
+    /// Tasks not in Trash, in list order.
     private func activeTasks() -> [BunnyTask] {
         let descriptor = FetchDescriptor<BunnyTask>(
-            predicate: #Predicate { $0.archivedAt == nil },
+            predicate: #Predicate { $0.deletedAt == nil },
             sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]
         )
         return (try? context.fetch(descriptor)) ?? []
@@ -167,9 +168,9 @@ final class BunnyToolsBackendImpl: BunnyToolsBackend {
         return (try? context.fetch(descriptor))?.first
     }
 
-    /// A non-archived task, or the "unknown id" tool error.
+    /// A task not in Trash, or the "unknown id" tool error.
     private func liveTask(_ id: UUID) -> Result<BunnyTask, BunnyToolError> {
-        guard let task = task(with: id), !task.isArchived else {
+        guard let task = task(with: id), task.isLive else {
             return .failure(BunnyToolError(message: "No task with id \(id.uuidString)"))
         }
         return .success(task)

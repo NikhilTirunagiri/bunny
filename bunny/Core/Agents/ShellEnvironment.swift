@@ -87,9 +87,14 @@ enum ShellEnvironment {
         return nil
     }
 
-    /// ProcessInfo env with PATH = loginPATH(), TERM=dumb, NO_COLOR=1.
+    /// Bunny's own environment for a child process: without an enclosing Claude Code session's variables.
+    nonisolated static func inherited() -> [String: String] {
+        ChildEnvironment.scrubbed(ProcessInfo.processInfo.environment)
+    }
+
+    /// `inherited()` with PATH = loginPATH(), TERM=dumb, NO_COLOR=1.
     nonisolated static func environment() -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
+        var environment = inherited()
         environment["PATH"] = loginPATH()
         environment["TERM"] = "dumb"
         environment["NO_COLOR"] = "1"
@@ -135,7 +140,7 @@ enum ShellEnvironment {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = outputHandle
         process.standardError = FileHandle.nullDevice
-        var environment = ProcessInfo.processInfo.environment
+        var environment = inherited()
         environment["TERM"] = "dumb"
         process.environment = environment
 

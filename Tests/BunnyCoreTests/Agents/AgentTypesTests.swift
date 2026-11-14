@@ -52,6 +52,7 @@ struct AgentTypesTests {
         #expect(AgentRunState.idle.label == "Idle")
         #expect(AgentRunState.running.label == "Working…")
         #expect(AgentRunState.needsInput.label == "Needs your input")
+        #expect(AgentRunState.replied.label == "Replied")
         #expect(AgentRunState.finished.label == "Done")
         #expect(AgentRunState.failed.label == "Failed")
         #expect(AgentRunState.stopped.label == "Stopped")
@@ -60,12 +61,15 @@ struct AgentTypesTests {
         #expect(AgentRunState.needsInput.isActive)
         #expect(!AgentRunState.idle.isActive)
         #expect(!AgentRunState.finished.isActive)
+        #expect(!AgentRunState.replied.isActive)
+        // Stored values of older stores stay valid.
+        #expect(AgentRunState(rawValue: "finished") == .finished)
+        #expect(AgentRunState.replied.rawValue == "replied")
     }
 
     @Test func openInAppDisplay() {
         #expect(OpenInApp.terminal.displayName == "Terminal")
-        #expect(OpenInApp.ghostty.displayName == "Ghostty")
         #expect(OpenInApp.vscode.displayName == "VS Code")
-        #expect(OpenInApp.cursor.displayName == "Cursor")
+        #expect(OpenInApp.allCases.map(\.displayName) == ["Terminal", "VS Code", "Claude app", "Codex app", "Other App"])
     }
 }

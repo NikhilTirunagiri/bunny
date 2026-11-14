@@ -2,40 +2,13 @@
   "fill-specializations" : [
     {
       "value" : {
-        "linear-gradient" : [
-          "display-p3:0.96000,0.96500,0.97500,1.00000",
-          "display-p3:0.80000,0.81500,0.84500,1.00000"
-        ],
-        "orientation" : {
-          "start" : { "x" : 0.3, "y" : 0 },
-          "stop" : { "x" : 0.7, "y" : 1 }
-        }
+        "solid" : "display-p3:0.07033,0.00000,0.37049,1.00000"
       }
     },
     {
       "appearance" : "dark",
       "value" : {
-        "linear-gradient" : [
-          "display-p3:0.34000,0.35000,0.37500,1.00000",
-          "display-p3:0.12000,0.12500,0.14000,1.00000"
-        ],
-        "orientation" : {
-          "start" : { "x" : 0.3, "y" : 0 },
-          "stop" : { "x" : 0.7, "y" : 1 }
-        }
-      }
-    },
-    {
-      "appearance" : "tinted",
-      "value" : {
-        "linear-gradient" : [
-          "display-p3:0.30000,0.30000,0.31000,1.00000",
-          "display-p3:0.12000,0.12000,0.13000,1.00000"
-        ],
-        "orientation" : {
-          "start" : { "x" : 0.5, "y" : 0 },
-          "stop" : { "x" : 0.5, "y" : 1 }
-        }
+        "solid" : "display-p3:0.04148,0.00000,0.19732,1.00000"
       }
     }
   ],
@@ -43,44 +16,65 @@
     {
       "layers" : [
         {
-          "glass" : false,
-          "image-name" : "Rabbit.png",
-          "name" : "Rabbit",
-          "position" : {
-            "scale" : 1,
-            "translation-in-points" : [ 0, 0 ]
-          }
-        }
-      ],
-      "name" : "Rabbit",
-      "shadow" : { "kind" : "neutral", "opacity" : 0.55 },
-      "specular" : false,
-      "translucency" : { "enabled" : false, "value" : 0 }
-    },
-    {
-      "blur-material" : 0.6,
-      "layers" : [
-        {
-          "glass" : false,
-          "image-name" : "Frost.png",
-          "name" : "Frost",
-          "opacity-specializations" : [
-            { "value" : 1 },
-            { "appearance" : "dark", "value" : 0.22 }
+          "blend-mode" : "overlay",
+          "fill-specializations" : [
+            {
+              "value" : {
+                "solid" : "display-p3:0.40149,0.45842,1.00000,1.00000"
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "linear-gradient" : [
+                  "display-p3:0.15151,0.00000,0.69385,1.00000",
+                  "display-p3:0.25486,0.00000,1.00000,1.00000"
+                ],
+                "orientation" : {
+                  "start" : {
+                    "x" : 0.11119947604790419,
+                    "y" : 0.3429061411149826
+                  },
+                  "stop" : {
+                    "x" : 0.9220340568862275,
+                    "y" : 0.9714449041811847
+                  }
+                }
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "display-p3:0.96783,0.23725,0.00000,1.00000"
+              }
+            }
           ],
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "Group.svg",
+          "name" : "Group",
           "position" : {
             "scale" : 1,
-            "translation-in-points" : [ 0, 0 ]
+            "translation-in-points" : [
+              -3,
+              -9
+            ]
           }
         }
       ],
-      "name" : "Frost",
-      "shadow" : { "kind" : "none", "opacity" : 0 },
-      "specular" : true,
-      "translucency" : { "enabled" : true, "value" : 0.6 }
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
     }
   ],
   "supported-platforms" : {
-    "squares" : [ "macOS" ]
+    "squares" : [
+      "macOS"
+    ]
   }
 }

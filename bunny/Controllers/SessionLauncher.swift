@@ -4,15 +4,16 @@ import os
 
 /// What `SessionLauncher.open` ended up doing.
 enum SessionLaunchOutcome: Equatable {
-    /// The session was opened in this app (the preferred one, or Terminal as the fallback).
-    case opened(OpenInApp)
+    /// The session was opened in the app of this name (the chosen one, or Terminal as the fallback,
+    /// with a one-line `note` saying why).
+    case opened(String, note: String?)
     /// Nothing could be opened; the resume command was copied to the pasteboard. The text explains it for the panel.
     case copiedToPasteboard(String)
 
-    /// One line for the task's activity.
+    /// The task's activity: "Opened in <app>", and the note on a second line (`AgentPanelRules.openedNote`).
     var activityText: String {
         switch self {
-        case let .opened(app): return "Opened in \(app.displayName)"
+        case let .opened(name, note): return "Opened in \(name)" + (note.map { "\n\($0)" } ?? "")
         case let .copiedToPasteboard(text): return text
         }
     }
@@ -23,13 +24,21 @@ enum SessionLaunchOutcome: Equatable {
 enum SessionLauncher {
     private static let log = Logger(subsystem: "bunny", category: "SessionLauncher")
     private static let commandFileLifetime: TimeInterval = 60
+    /// `claude --desktop` only hands the session to the app; it is given this long to do so.
+    private static let cliTimeout: TimeInterval = 30
+    /// `/usr/bin/open` answers at once; if it ever does not, the launch must still end.
+    private static let openTimeout: TimeInterval = 15
+    private static let killGrace: TimeInterval = 2
 
     private struct LaunchError: Error {
         let message: String
+        /// What the tool itself said (the first meaningful line of its output), for the note in the agent section.
+        var said: String?
     }
 
-    /// Executes SessionLaunchPlanner steps; on failure falls back to the Terminal plan; last resort copies the
-    /// resume command to the pasteboard. Waits for `/usr/bin/open` to report success before calling it opened.
+    /// Executes SessionLaunchPlanner steps for the agent's chosen app; on failure falls back to the Terminal plan
+    /// (with a note); last resort copies the resume command to the pasteboard. Waits for `/usr/bin/open` to report
+    /// success before calling it opened.
     /// `model`/`effort`: the run's settings, passed on to the resume command (nil = the CLI's default).
     static func open(harness: AgentHarness, sessionID: String, cwd: String,
                      model: String? = nil, effort: String? = nil) async -> SessionLaunchOutcome {
@@ -44,19 +53,25 @@ enum SessionLauncher {
                 "\(harness.displayName) not found — set its path in Settings → Agents. Resume command copied: \(command)")
         }
 
-        let app = AgentSettings.openIn
-        if app != .terminal {
-            if AgentSettings.isInstalled(app) {
-                let steps = SessionLaunchPlanner.plan(app: app, harness: harness, cliPath: cliPath, sessionID: sessionID,
-                                                      cwd: cwd, model: model, effort: effort)
+        let terminal = OpenInApp.terminal.displayName
+        let target = AgentSettings.openTarget(for: harness)
+        var note: String?
+        if target.app != .terminal {
+            if let appPath = target.appPath {
+                let steps = SessionLaunchPlanner.plan(app: target.app, harness: harness, cliPath: cliPath,
+                                                      sessionID: sessionID, cwd: cwd, model: model, effort: effort,
+                                                      appPath: appPath, bundleIdentifier: target.bundleIdentifier)
                 do {
                     try await execute(steps)
-                    return .opened(app)
+                    return .opened(target.name, note: nil)
                 } catch {
-                    logFailure(app.displayName, error)
+                    logFailure(target.name, error)
+                    let said = (error as? LaunchError)?.said
+                    note = "Couldn't open in \(target.name)\(said.map { " (\($0))" } ?? "") — opened in \(terminal) instead."
                 }
             } else {
-                logFailure(app.displayName, LaunchError(message: "not installed"))
+                logFailure(target.name, LaunchError(message: "not installed"))
+                note = "\(target.name) wasn't found — opened in \(terminal) instead."
             }
         }
 
@@ -64,9 +79,9 @@ enum SessionLauncher {
                                                       sessionID: sessionID, cwd: cwd, model: model, effort: effort)
         do {
             try await execute(terminalSteps)
-            return .opened(.terminal)
+            return .opened(terminal, note: note)
         } catch {
-            logFailure(OpenInApp.terminal.displayName, error)
+            logFailure(terminal, error)
         }
 
         let command = SessionLaunchPlanner.resumeCommand(harness: harness, cliPath: cliPath, sessionID: sessionID,
@@ -95,13 +110,21 @@ enum SessionLauncher {
         }
         for step in steps {
             switch step {
-            case let .runCommandFile(script):
-                try await runCommandFile(script)
+            case let .runCommandFile(script, openArguments):
+                try await runCommandFile(script, openArguments: openArguments)
+            case let .runCLI(executable, arguments, cwd):
+                try await runCLI(executable, arguments, cwd: cwd)
             case let .exec(executable, arguments):
                 try await exec(executable, arguments)
             case let .openURL(string, delay):
                 // preflight validated the URL and that an app handles its scheme.
                 guard let url = URL(string: string) else { continue }
+                guard delay > 0 else {
+                    guard NSWorkspace.shared.open(url) else {
+                        throw LaunchError(message: "NSWorkspace.open(\(string)) returned false")
+                    }
+                    continue
+                }
                 Task { @MainActor in
                     try? await Task.sleep(for: .seconds(delay))
                     if !NSWorkspace.shared.open(url) {
@@ -116,7 +139,7 @@ enum SessionLauncher {
         switch step {
         case .runCommandFile:
             break
-        case let .exec(executable, _):
+        case let .exec(executable, _), let .runCLI(executable, _, _):
             guard FileManager.default.isExecutableFile(atPath: executable) else {
                 throw LaunchError(message: "No executable at \(executable)")
             }
@@ -136,6 +159,8 @@ enum SessionLauncher {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        // `open` hands its environment to an app it launches; an editor CLI to the editor.
+        process.environment = ShellEnvironment.inherited()
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -144,6 +169,20 @@ enum SessionLauncher {
             try process.run()
             return
         }
+        guard let status = try await run(process, timeout: openTimeout) else {
+            throw LaunchError(message: "open \(arguments.joined(separator: " ")) did not finish in \(Int(openTimeout)) s")
+        }
+        guard status == 0 else {
+            throw LaunchError(message: "open \(arguments.joined(separator: " ")) exited with status \(status)")
+        }
+    }
+
+    /// Starts `process` and waits for it without blocking the main thread. Returns its exit status,
+    /// or nil when it had not exited after `timeout` and was killed: SIGTERM to its process group
+    /// (`Process` makes the child the leader of its own), SIGKILL after `killGrace`.
+    private static func run(_ process: Process, timeout: TimeInterval) async throws -> Int32? {
+        let timedOut = OSAllocatedUnfairLock(initialState: false)
+        let grace = killGrace
         let status: Int32 = try await withCheckedThrowingContinuation { continuation in
             process.terminationHandler = { finished in
                 continuation.resume(returning: finished.terminationStatus)
@@ -153,15 +192,62 @@ enum SessionLauncher {
             } catch {
                 process.terminationHandler = nil
                 continuation.resume(throwing: error)
+                return
+            }
+            let pid = process.processIdentifier
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                guard process.isRunning else { return }
+                timedOut.withLock { $0 = true }
+                if kill(-pid, SIGTERM) != 0 { kill(pid, SIGTERM) }
+                DispatchQueue.global().asyncAfter(deadline: .now() + grace) {
+                    guard process.isRunning else { return }
+                    if kill(-pid, SIGKILL) != 0 { kill(pid, SIGKILL) }
+                }
             }
         }
-        guard status == 0 else {
-            throw LaunchError(message: "open \(arguments.joined(separator: " ")) exited with status \(status)")
-        }
+        return timedOut.withLock { $0 } ? nil : status
     }
 
-    /// Writes `~/Library/Application Support/Bunny/launch/<uuid>.command` (0755), opens it with Terminal and deletes it after 60 s.
-    private static func runCommandFile(_ script: String) async throws {
+    /// Runs a short-lived command in `cwd` with the scrubbed environment and waits for it. Success is
+    /// exit status 0 and nothing else: what it prints is not judged (under a pseudo-terminal the
+    /// output carries control characters). A non-zero exit, or no exit within `cliTimeout`, throws,
+    /// with the first meaningful line of the output as `said`.
+    private static func runCLI(_ executable: String, _ arguments: [String], cwd: String) async throws {
+        // May run a login shell (≤3 s) when the PATH is not cached yet: never on the main thread.
+        let environment = await Task.detached { ShellEnvironment.environment() }.value
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        // Output goes to a file, not a pipe: a pipe read could wait on a process the command left behind.
+        let outputFile = FileManager.default.temporaryDirectory.appendingPathComponent("bunny-open-\(UUID().uuidString).log")
+        guard FileManager.default.createFile(atPath: outputFile.path, contents: nil),
+              let output = try? FileHandle(forWritingTo: outputFile) else {
+            throw LaunchError(message: "Couldn't create \(outputFile.path)")
+        }
+        defer {
+            try? output.close()
+            try? FileManager.default.removeItem(at: outputFile)
+        }
+        process.standardOutput = output
+        process.standardError = output
+
+        let command = "\(executable) \(arguments.joined(separator: " "))"
+        guard let status = try await run(process, timeout: cliTimeout) else {
+            throw LaunchError(message: "\(command) did not finish in \(Int(cliTimeout)) s",
+                              said: "no answer after \(Int(cliTimeout)) s")
+        }
+        guard status != 0 else { return }
+        let printed = (try? Data(contentsOf: outputFile)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        throw LaunchError(message: "\(command) exited with status \(status): \(printed)",
+                          said: SessionLaunchPlanner.firstMeaningfulLine(printed))
+    }
+
+    /// Writes `~/Library/Application Support/Bunny/launch/<uuid>.command` (0755), runs `/usr/bin/open` with
+    /// `openArguments` (the placeholder argument replaced by the file's path) and deletes the file after 60 s.
+    private static func runCommandFile(_ script: String, openArguments: [String]) async throws {
         let fileManager = FileManager.default
         guard let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             throw LaunchError(message: "No Application Support directory")
@@ -174,7 +260,7 @@ enum SessionLauncher {
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
 
         do {
-            try await exec("/usr/bin/open", ["-a", "Terminal", file.path])
+            try await exec("/usr/bin/open", openArguments.map { $0 == SessionLaunchPlanner.scriptPlaceholder ? file.path : $0 })
         } catch {
             try? fileManager.removeItem(at: file)
             throw error
