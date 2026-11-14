@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             NSApp.terminate(nil)
             return
         }
+        backUpBeforeV3(storeURL)
         do {
             modelContainer = try ModelContainer(for: BunnyTask.self, ShelfItem.self,
                                                 configurations: ModelConfiguration(url: storeURL))
@@ -37,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         BunnyToolsServer.shared.backend = BunnyToolsBackendImpl(modelContainer: modelContainer)
         BunnyToolsServer.shared.start()
         AgentSupervisor.shared.configure(modelContainer: modelContainer)
+        WindowManager.shared.modelContainer = modelContainer
         statusBarController.setup(modelContainer: modelContainer)
 
         MidnightScheduler.shared.modelContext = modelContainer.mainContext
@@ -46,6 +48,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             WindowManager.shared.showOnboarding()
         } else {
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        }
+    }
+
+    /// Once, before v3 first opens the store (after any copy from the sandboxed build): keep the
+    /// files as they are in `Backups/pre-v3`. A failure is logged and never blocks the launch.
+    private func backUpBeforeV3(_ storeURL: URL) {
+        let applicationSupport = storeURL.deletingLastPathComponent().deletingLastPathComponent()
+        do {
+            try StoreBackup.run(store: storeURL, directory: StoreBackup.directory(applicationSupport: applicationSupport))
+        } catch {
+            NSLog("Bunny: the pre-v3 backup failed: %@", error.localizedDescription)
         }
     }
 

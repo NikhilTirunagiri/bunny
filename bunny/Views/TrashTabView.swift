@@ -49,7 +49,7 @@ struct TrashView: View {
             Button { coordinator.leaveTrash() } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BunnyTheme.secondary)
             }
             .buttonStyle(.bunnyIcon)
             .help("Back to notes (Esc)")
@@ -71,7 +71,7 @@ struct TrashView: View {
             Text("Trash is empty")
                 .font(.callout)
         }
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(BunnyTheme.tertiary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -111,18 +111,18 @@ struct TrashView: View {
         return HStack(spacing: RowMetrics.spacing) {
             Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 17))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(BunnyTheme.tertiary)
                 .frame(width: RowMetrics.checkbox)
             Text(task.title)
                 .font(.system(size: 14))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BunnyTheme.secondary)
                 .lineLimit(1)
             Spacer()
             if let retention = NotesPreferences.trashRetentionDays, let deletedAt = task.deletedAt {
                 let days = TrashRules.daysLeft(deletedAt: deletedAt, retentionDays: retention, now: Date())
                 Text(days == 1 ? "1 day left" : "\(days) days left")
                     .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(BunnyTheme.tertiary)
             }
         }
         .padding(.leading, RowMetrics.gutter)
@@ -148,8 +148,8 @@ struct TrashView: View {
 
     /// Selection (accent tint), then hover.
     private func rowBackground(selected: Bool, hovered: Bool) -> AnyShapeStyle {
-        if selected { return AnyShapeStyle(Color.accentColor.opacity(0.2)) }
-        if hovered { return AnyShapeStyle(.quaternary.opacity(0.7)) }
+        if selected { return AnyShapeStyle(BunnyTheme.selection(dark: 0.2)) }
+        if hovered { return AnyShapeStyle(BunnyTheme.surface(dark: .quaternary.opacity(0.7))) }
         return AnyShapeStyle(.clear)
     }
 }
@@ -179,7 +179,7 @@ struct DeleteConfirmationView: View {
                     .font(.system(size: 13, weight: .semibold))
                 Text("These notes and their subtasks are removed for good. Attached files stay on disk.")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BunnyTheme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Toggle("Do not ask again", isOn: $doNotAskAgain)
                     .toggleStyle(.checkbox)
@@ -198,7 +198,7 @@ struct DeleteConfirmationView: View {
             }
             .padding(14)
             .frame(width: 260)
-            .background(.regularMaterial, in: .rect(cornerRadius: 12, style: .continuous))
+            .background(BunnyTheme.background(dark: .regularMaterial), in: .rect(cornerRadius: 12, style: .continuous))
             .shadow(radius: 12)
         }
     }

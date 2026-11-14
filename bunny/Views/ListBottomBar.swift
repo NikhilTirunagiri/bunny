@@ -86,7 +86,7 @@ struct ActionStrip<SelectionActions: View, StandingActions: View>: View {
         HStack(spacing: 6) {
             Text(caption)
                 .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BunnyTheme.secondary)
                 .lineLimit(1)
                 // Three buttons leave "Copied 2 notes" just enough room: never truncate it.
                 .fixedSize()
@@ -105,7 +105,7 @@ struct ActionStrip<SelectionActions: View, StandingActions: View>: View {
         Button { coordinator.performUndo() } label: {
             HStack(spacing: 5) {
                 Text("Undo")
-                Text("⌘Z").foregroundStyle(.tertiary)
+                Text("⌘Z").foregroundStyle(BunnyTheme.tertiary)
             }
         }
     }

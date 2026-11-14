@@ -11,6 +11,9 @@ final class StatusBarController: NSObject {
     /// Up to when finished timers have been announced (`TimerRules.justExpired`).
     private var lastTimerCheck = Date()
 
+    /// "Show the pinned note in the menu bar" (Settings → General). Default on; off = icon only.
+    static let showPinnedNoteKey = "menuBar.showPinnedNote"
+
     private static let monoFont = NSFont.monospacedDigitSystemFont(
         ofSize: NSFont.systemFontSize,
         weight: .regular
@@ -66,11 +69,14 @@ final class StatusBarController: NSObject {
         let dropView = StatusItemDropView(frame: button.bounds)
         dropView.onDragEntered = { [weak self] in self?.openWindow() }
         dropView.onClick = { [weak self] in self?.toggleWindow() }
+        dropView.onRightClick = { [weak self] in self?.showMenu() }
         button.addSubview(dropView)
 
         windowController = MainWindowController(modelContainer: modelContainer, statusButton: button)
         WindowManager.shared.onWillShowWindow = { [weak self] in self?.closeWindow() }
         WindowManager.shared.onFinishOnboarding = { [weak self] in self?.openWindow() }
+        GlobalHotKey.shared.onPress = { [weak self] in self?.windowController?.toggleFromShortcut() }
+        GlobalHotKey.shared.registerStored()
 
         restorePinnedTask()
         startUpdateTimer()
@@ -98,6 +104,28 @@ final class StatusBarController: NSObject {
     @objc func toggleWindow() {
         windowController?.toggle()
     }
+
+    /// Right click on the status item. The menu is attached only while it is open: a status item
+    /// that keeps a menu shows it on every click.
+    private func showMenu() {
+        closeWindow()
+        let menu = NSMenu()
+        let launch = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        launch.state = LaunchAtLogin.isEnabled ? .on : .off
+        menu.addItem(launch)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ","))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit Bunny", action: #selector(quit), keyEquivalent: "q"))
+        for item in menu.items { item.target = self }
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    @objc private func toggleLaunchAtLogin() { LaunchAtLogin.set(!LaunchAtLogin.isEnabled) }
+    @objc private func showSettings() { WindowManager.shared.showSettings() }
+    @objc private func quit() { NSApp.terminate(nil) }
 
     func openWindow() {
         windowController?.openWindow()
@@ -129,6 +157,11 @@ final class StatusBarController: NSObject {
             return
         }
 
+        // The note stays pinned; it is only not written out.
+        guard UserDefaults.standard.object(forKey: Self.showPinnedNoteKey) as? Bool ?? true else {
+            setDefault(button)
+            return
+        }
         let truncated = String(task.title.prefix(20))
 
         if task.isTimerRunning {

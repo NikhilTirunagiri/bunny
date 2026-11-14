@@ -1,30 +1,50 @@
 import AppKit
+import SwiftData
 import SwiftUI
-import Observation
 
 /// Owns Bunny's real windows (Settings, Onboarding). While any is open Bunny shows in the Dock and ⌘-Tab.
 @MainActor
 final class WindowManager: NSObject, NSWindowDelegate {
     static let shared = WindowManager()
-    enum SettingsTab: Hashable { case general, agents, about }
+    private static let settingsSize = NSSize(width: 780, height: 540)
+    private static let settingsMinSize = NSSize(width: 680, height: 420)
 
+    /// The notes store, for Settings → Data. Set at launch.
+    var modelContainer: ModelContainer?
     var onWillShowWindow: (() -> Void)?
     /// Set by `StatusBarController`; called when onboarding finishes so the popover opens.
     /// (`NSApp.delegate as? AppDelegate` is nil under `@NSApplicationDelegateAdaptor`.)
     var onFinishOnboarding: (() -> Void)?
-    private var settingsWindow: NSWindow?
+    private var settingsWindow: SettingsWindow?
     private var onboardingWindow: NSWindow?
-    private let settingsSelection = SettingsSelection()
+    private let settingsModel = SettingsModel()
 
-    func showSettings(tab: SettingsTab = .general) {
-        settingsSelection.tab = tab
-        let window = settingsWindow ?? makeWindow(
-            title: "Bunny Settings",
-            size: NSSize(width: 560, height: 460),
-            root: SettingsWindowView().environment(settingsSelection)
-        )
+    /// Shows the one Settings window, on `page` or where it was left.
+    func showSettings(page: SettingsCatalog.Page? = nil) {
+        guard let modelContainer else { return }
+        if let page { settingsModel.page = page }
+        let window = settingsWindow ?? makeSettingsWindow(
+            root: SettingsView().environment(settingsModel).modelContainer(modelContainer))
         settingsWindow = window
+        // Every open starts with nothing focused, whatever was being edited when it closed.
+        if !window.isVisible { window.dropFocus() }
         present(window)
+    }
+
+    /// Resizable, with the size and place remembered; the page title stands in for the window title.
+    private func makeSettingsWindow<V: View>(root: V) -> SettingsWindow {
+        let window = configure(SettingsWindow(contentRect: NSRect(origin: .zero, size: Self.settingsSize),
+                                              styleMask: Self.style, backing: .buffered, defer: false),
+                               title: "Bunny Settings", size: Self.settingsSize, root: root)
+        window.styleMask.insert(.resizable)
+        window.titleVisibility = .hidden
+        // The window's size is the user's, not the content's.
+        (window.contentViewController as? NSHostingController<V>)?.sizingOptions = []
+        window.contentMinSize = Self.settingsMinSize
+        window.setContentSize(Self.settingsSize)
+        window.center()
+        window.setFrameAutosaveName("BunnySettings")
+        return window
     }
 
     func showOnboarding() {
@@ -49,10 +69,15 @@ final class WindowManager: NSObject, NSWindowDelegate {
         }
     }
 
+    private static let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
+
     private func makeWindow<V: View>(title: String, size: NSSize, root: V) -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
-                              styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
-                              backing: .buffered, defer: false)
+        configure(NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: Self.style,
+                           backing: .buffered, defer: false),
+                  title: title, size: size, root: root)
+    }
+
+    private func configure<W: NSWindow, V: View>(_ window: W, title: String, size: NSSize, root: V) -> W {
         window.title = title
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
@@ -81,9 +106,4 @@ final class WindowManager: NSObject, NSWindowDelegate {
             NSApp.setActivationPolicy(.accessory)
         }
     }
-}
-
-@MainActor @Observable
-final class SettingsSelection {
-    var tab: WindowManager.SettingsTab = .general
 }

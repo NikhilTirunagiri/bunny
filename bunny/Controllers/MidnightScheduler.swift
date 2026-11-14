@@ -41,7 +41,8 @@ final class MidnightScheduler {
         timer = t
     }
 
-    private func runHousekeeping() {
+    /// Also run when a retention setting changes.
+    func runHousekeeping() {
         guard let context = modelContext else { return }
         TaskActions.trashExpiredCompleted(in: context)
         TaskActions.purgeExpiredTrash(in: context)

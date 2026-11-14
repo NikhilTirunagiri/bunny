@@ -143,6 +143,14 @@ final class PanelCoordinator {
     /// Notes that were trashed or deleted: drop them from the selection.
     func tasksRemoved(_ ids: [UUID]) { apply(.removed(Set(ids))) }
 
+    /// Every note was erased (Settings → Data): nothing is selected and there is nothing to undo.
+    func dataErased() {
+        undo = nil
+        deleteConfirmation = nil
+        trashSelection = SelectionModel.Selection()
+        apply(.clear)
+    }
+
     /// Drops selected ids that are no longer in the active list (e.g. changed by an agent).
     func pruneSelection(keeping active: Set<UUID>) {
         let gone = selection.ids.subtracting(active)

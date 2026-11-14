@@ -19,7 +19,7 @@ struct AgentPanelSection: View {
         case .needsInput: return AnyShapeStyle(Color.agentNeedsInput)
         case .finished: return AnyShapeStyle(Color.green)
         case .failed: return AnyShapeStyle(Color.red)
-        default: return AnyShapeStyle(.secondary)
+        default: return AnyShapeStyle(BunnyTheme.secondary)
         }
     }
 
@@ -36,7 +36,7 @@ struct AgentPanelSection: View {
             if !task.agentActivity.isEmpty {
                 Text(task.agentActivity)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BunnyTheme.secondary)
                     .lineLimit(2)
             }
             if task.runState == .needsInput, let question = task.pendingQuestion {
@@ -49,7 +49,7 @@ struct AgentPanelSection: View {
             actionsRow
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.quaternary.opacity(0.5)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(BunnyTheme.surface(dark: .quaternary.opacity(0.5))))
     }
 
     // MARK: - Header
@@ -66,7 +66,7 @@ struct AgentPanelSection: View {
             if task.runState.isActive, let startedAt = task.agentStartedAt {
                 Text(elapsed(since: startedAt))
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BunnyTheme.secondary)
             }
         }
     }
@@ -276,7 +276,7 @@ private struct QuestionForm: View {
             if let header = item.header, !header.isEmpty {
                 Text(header)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BunnyTheme.secondary)
             }
             Text(item.question)
                 .font(.system(size: 13))
@@ -288,7 +288,7 @@ private struct QuestionForm: View {
                     .lineLimit(3...6)
                     .focused($focusedKey, equals: item.key)
                     .padding(6)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.quaternary.opacity(0.4)))
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(BunnyTheme.deepSurface(dark: .quaternary.opacity(0.4))))
             } else {
                 VStack(spacing: 4) {
                     ForEach(item.options, id: \.label) { option in
@@ -301,7 +301,7 @@ private struct QuestionForm: View {
                         .focused($focusedKey, equals: item.key)
                         .font(.system(size: 12.5))
                         .padding(6)
-                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.quaternary.opacity(0.4)))
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(BunnyTheme.deepSurface(dark: .quaternary.opacity(0.4))))
                 }
             }
         }
@@ -321,7 +321,7 @@ private struct QuestionForm: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(option.label).font(.system(size: 12.5))
                     if let detail = option.detail, !detail.isEmpty {
-                        Text(detail).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                        Text(detail).font(.system(size: 10.5)).foregroundStyle(BunnyTheme.secondary)
                     }
                 }
                 Spacer(minLength: 0)
@@ -387,7 +387,7 @@ private struct QuestionForm: View {
                     Text(title).font(.system(size: 11, weight: .semibold, design: .monospaced))
                 }
                 if let detail = question.approvalDetail, !detail.isEmpty {
-                    Text(detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                    Text(detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(BunnyTheme.secondary)
                 }
             }
             .textSelection(.enabled)

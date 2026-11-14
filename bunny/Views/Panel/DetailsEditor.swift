@@ -110,7 +110,7 @@ final class DetailsTextView: NSTextView {
         super.draw(dirtyRect)
         guard string.isEmpty, !hasMarkedText() else { return }
         Self.placeholder.draw(at: textContainerOrigin, withAttributes: [
-            .font: Self.detailsFont, .foregroundColor: NSColor.tertiaryLabelColor,
+            .font: Self.detailsFont, .foregroundColor: BunnyTheme.placeholder,
         ])
     }
 
@@ -124,7 +124,7 @@ final class DetailsTextView: NSTextView {
         textStorage.beginEditing()
         textStorage.setAttributes(baseAttributes, range: NSRange(location: 0, length: textStorage.length))
         for link in links {
-            textStorage.addAttributes([.foregroundColor: NSColor.linkColor,
+            textStorage.addAttributes([.foregroundColor: BunnyTheme.link,
                                        .underlineStyle: NSUnderlineStyle.single.rawValue], range: link.range)
         }
         textStorage.endEditing()

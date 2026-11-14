@@ -170,7 +170,7 @@ struct TaskRowView: View {
             } label: {
                 Image(systemName: task.isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BunnyTheme.secondary)
             }
             // A little wider than the gutter, for a target that is easy to hit.
             .buttonStyle(BunnyButtonStyle(kind: .icon(18)))
@@ -209,7 +209,7 @@ struct TaskRowView: View {
             }
         }
         .font(.system(size: 10))
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(BunnyTheme.tertiary)
         .fixedSize()
     }
 
@@ -218,8 +218,8 @@ struct TaskRowView: View {
     /// File drop target, then selection (accent tint), then hover.
     private var rowBackground: AnyShapeStyle {
         if isFileTargeted { return AnyShapeStyle(Color.accentColor.opacity(0.12)) }
-        if isSelected { return AnyShapeStyle(Color.accentColor.opacity(0.2)) }
-        if isHovered { return AnyShapeStyle(.quaternary.opacity(0.7)) }
+        if isSelected { return AnyShapeStyle(BunnyTheme.selection(dark: 0.2)) }
+        if isHovered { return AnyShapeStyle(BunnyTheme.surface(dark: .quaternary.opacity(0.7))) }
         return AnyShapeStyle(.clear)
     }
 
@@ -310,13 +310,13 @@ struct TaskRowView: View {
             if hasSubtasks {
                 Image(systemName: "list.bullet.indent")
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BunnyTheme.secondary)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(width: 240, alignment: .leading)
-        .background(Color(nsColor: .windowBackgroundColor), in: .rect(cornerRadius: 8, style: .continuous))
+        .background(BunnyTheme.background(), in: .rect(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.separator))
     }
 
@@ -334,7 +334,7 @@ struct TaskRowView: View {
         default:
             Text(task.title)
                 .font(.system(size: 14))
-                .foregroundStyle(task.isCompleted ? .secondary : .primary)
+                .foregroundStyle(task.isCompleted ? AnyShapeStyle(BunnyTheme.secondary) : AnyShapeStyle(.primary))
                 .strikethrough(task.isCompleted, color: .secondary)
                 .lineLimit(1)
         }
@@ -350,13 +350,13 @@ struct TaskRowView: View {
         }
     }
 
-    private var checkboxColor: Color {
+    private var checkboxColor: AnyShapeStyle {
         switch task.runState {
-        case .needsInput: return .agentNeedsInput
-        case .failed: return .red
+        case .needsInput: return AnyShapeStyle(Color.agentNeedsInput)
+        case .failed: return AnyShapeStyle(Color.red)
         default:
-            guard task.isCompleted else { return .secondary }
-            return task.completedByAgent ? .green : .blue
+            guard task.isCompleted else { return AnyShapeStyle(Color.secondary) }
+            return task.completedByAgent ? AnyShapeStyle(Color.green) : AnyShapeStyle(BunnyTheme.done)
         }
     }
 
@@ -450,7 +450,7 @@ private struct TimerBadge: View {
         } else {
             Text(task.formattedRemaining)
                 .font(.system(size: 10).monospacedDigit())
-                .foregroundStyle(task.isTimerRunning ? .secondary : .tertiary)
+                .foregroundStyle(task.isTimerRunning ? AnyShapeStyle(BunnyTheme.secondary) : AnyShapeStyle(BunnyTheme.tertiary))
                 .help(task.isTimerRunning ? "Timer running" : "Timer set")
         }
     }

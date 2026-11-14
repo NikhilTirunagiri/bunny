@@ -77,6 +77,19 @@ final class MainWindowController {
         }
     }
 
+    /// The global shortcut: closes the window when it is open and has the keyboard; otherwise opens it
+    /// (or takes the keyboard back) with focus in the New note field.
+    func toggleFromShortcut() {
+        if panel.isVisible && panel.isKeyWindow {
+            closeWindow()
+        } else if panel.isVisible {
+            panel.makeKey()
+            coordinator.focusNewNote()
+        } else {
+            openWindow()
+        }
+    }
+
     /// Opens on the notes list with nothing open (the last note when the note side is pinned),
     /// focus in the New note field.
     func openWindow() {
@@ -186,7 +199,7 @@ final class MainWindowController {
         return event.keyCode == 53 ? handleEscape() : handleListKey(event)
     }
 
-    /// ⌘N and ⌘F from anywhere. In the Trash view: ↑/↓ move the selection, ⌘A selects all, ⌫ / ⌘⌫
+    /// ⌘Q quits and ⌘, opens Settings, from anywhere. ⌘N and ⌘F from anywhere. In the Trash view: ↑/↓ move the selection, ⌘A selects all, ⌫ / ⌘⌫
     /// delete the selection forever (after the confirmation). Otherwise: Tab accepts the quick-capture offer while its strip shows. The rest act
     /// on the notes list, only while no text field or editor has focus: ↑/↓ move the selection, ⌥↑/⌥↓
     /// move the note, Return shows the note, Space toggles complete, ⌫ / ⌘⌫ move to Trash, ⌘A selects
@@ -196,6 +209,14 @@ final class MainWindowController {
     private func handleListKey(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased()
+        if flags == .command && key == "q" {
+            NSApp.terminate(nil)
+            return true
+        }
+        if flags == .command && key == "," {
+            WindowManager.shared.showSettings()
+            return true
+        }
         // The delete confirmation takes no list shortcuts (nor ⌘N); Return picks its default, Cancel.
         if coordinator.deleteConfirmation != nil {
             if event.keyCode == 36 || event.keyCode == 76 {

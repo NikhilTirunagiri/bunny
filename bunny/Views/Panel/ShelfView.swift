@@ -22,9 +22,9 @@ struct ShelfView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 5) {
-                Text("Attachments").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.secondary)
+                Text("Attachments").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(BunnyTheme.secondary)
                 if !items.isEmpty {
-                    Text("\(items.count)").font(.system(size: 11.5)).foregroundStyle(.tertiary)
+                    Text("\(items.count)").font(.system(size: 11.5)).foregroundStyle(BunnyTheme.tertiary)
                 }
                 Spacer()
                 Button {
@@ -33,7 +33,7 @@ struct ShelfView: View {
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BunnyTheme.secondary)
                 }
                 .buttonStyle(.bunnyRowIcon)
                 .help("Attach files…")
@@ -41,7 +41,7 @@ struct ShelfView: View {
             if items.isEmpty {
                 Label("Drop or paste a file to attach it", systemImage: "paperclip")
                     .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(BunnyTheme.tertiary)
             } else {
                 LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 8) {
                     ForEach(items) { AttachmentTile(item: $0) }
@@ -76,13 +76,13 @@ private struct AttachmentTile: View {
         VStack(spacing: 4) {
             // The preview is an overlay so an image filling the tile cannot widen it.
             Rectangle()
-                .fill(.quaternary.opacity(0.5))
+                .fill(BunnyTheme.surface(dark: .quaternary.opacity(0.5)))
                 .frame(height: 50)
                 .overlay { preview(url) }
                 .clipShape(.rect(cornerRadius: 8, style: .continuous))
             Text(item.displayName)
                 .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BunnyTheme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -119,9 +119,9 @@ private struct AttachmentTile: View {
                 Button { ShelfService.remove(item, in: context) } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 7.5, weight: .bold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BunnyTheme.secondary)
                         .frame(width: 16, height: 16)
-                        .background(Color(nsColor: .windowBackgroundColor), in: .circle)
+                        .background(BunnyTheme.background(), in: .circle)
                         .overlay(Circle().strokeBorder(.separator, lineWidth: 0.5))
                 }
                 .buttonStyle(BunnyButtonStyle(kind: .icon(16)))

@@ -53,10 +53,16 @@ final class MainPanel: NSPanel {
     /// A text field commits when it loses focus, and a click on a button, a row or empty space takes
     /// no focus by itself: give it up here, before the click does its own job.
     private func endEditIfClickedOutside(_ event: NSEvent) {
-        guard let editor = firstResponder as? NSTextView, editor.isFieldEditor else { return }
-        let field = editor.delegate as? NSView ?? editor
-        guard !field.convert(field.bounds, to: nil).contains(event.locationInWindow),
-              endsEditOnClick?(event) == true else { return }
+        guard isClickOutsideEditedField(event), endsEditOnClick?(event) == true else { return }
         makeFirstResponder(nil)
+    }
+}
+
+extension NSWindow {
+    /// A text field is being edited and the click landed outside it.
+    func isClickOutsideEditedField(_ event: NSEvent) -> Bool {
+        guard let editor = firstResponder as? NSTextView, editor.isFieldEditor else { return false }
+        let field = editor.delegate as? NSView ?? editor
+        return !field.convert(field.bounds, to: nil).contains(event.locationInWindow)
     }
 }

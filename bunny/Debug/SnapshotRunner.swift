@@ -149,6 +149,10 @@ enum SnapshotRunner {
             coordinator.showTrash()
         }),
         State(name: "trash-empty", empty: true, setUp: {  _, coordinator in coordinator.showTrash() }),
+        State(name: "trash-delete-confirmation", setUp: {  _, coordinator in
+            coordinator.showTrash()
+            coordinator.deleteConfirmation = DeleteConfirmation(title: "Delete 3 notes forever?", confirmTitle: "Delete Forever") {}
+        }),
         State(name: "list-selected-undo", setUp: { sample, coordinator in
             for note in [sample.plain, sample.details] { coordinator.apply(.toggle(note.id)) }
             coordinator.offerUndo(UndoRules.message(.completed, count: 1)) {}
@@ -189,7 +193,33 @@ enum SnapshotRunner {
         noteSide("note-needs-input") { $0.question },
         noteSide("note-agent-running") { $0.running },
         noteSide("note-agent-failed") { $0.failed },
+        // The Settings window's content, one state per page. Not shown: the title bar (the sidebar
+        // starts below it in the real window), and the menus of the pop-up buttons.
+        settings("settings-general", page: .general),
+        settings("settings-appearance", page: .appearance),
+        settings("settings-notes", page: .notes),
+        settings("settings-agents", page: .agents),
+        settings("settings-agents-advanced", page: .agents, height: 1500) { $0.advancedExpanded = true },
+        settings("settings-data", page: .data),
+        settings("settings-about", page: .about),
+        // "trash" typed in the sidebar, and its second result chosen.
+        settings("settings-search", page: .general) { model in
+            model.query = "trash"
+            model.reveal(SettingsCatalog.row(.trashRetention))
+        },
+        settings("settings-search-no-results", page: .general) { $0.query = "zebra" },
     ]
+
+    /// The Settings window's content on one page, with fixed sample values (`settingsLive` off).
+    private static func settings(_ name: String, page: SettingsCatalog.Page, height: CGFloat = 540,
+                                 configure: @escaping (SettingsModel) -> Void = { _ in }) -> State {
+        State(name: name, width: 780, height: height, content: { _ in
+            let model = SettingsModel()
+            model.page = page
+            configure(model)
+            return AnyView(SettingsView().environment(model).environment(\.settingsLive, false))
+        })
+    }
 
     /// The full card (list and note side) with one note open.
     private static func noteSide(_ name: String, hovered: @escaping (Sample) -> UUID? = { _ in nil },

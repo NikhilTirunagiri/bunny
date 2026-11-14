@@ -57,7 +57,7 @@ struct TaskPanelView: View {
             Button { coordinator.closeNoteSide() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BunnyTheme.secondary)
             }
             .buttonStyle(Self.headerButton)
             .help("Close")
@@ -177,7 +177,7 @@ private struct NoteFooter: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(NoteText.createdLabel(task.createdAt, now: Date()))
                 .font(.system(size: 11.5))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(BunnyTheme.tertiary)
             if !task.isSubtask && AgentConfigMenu.isAvailable(for: task) {
                 HStack(spacing: 2) {
                     Button { AgentSupervisor.shared.primaryAction(for: task) } label: {
@@ -193,7 +193,7 @@ private struct NoteFooter: View {
                     } label: {
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(BunnyTheme.secondary)
                     }
                     .menuStyle(.button)
                     .menuIndicator(.hidden)
@@ -202,7 +202,7 @@ private struct NoteFooter: View {
                     .help("Agent, model and effort for this note")
                     Text(harness.displayName)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(BunnyTheme.secondary)
                         .lineLimit(1)
                         .padding(.leading, 6)
                 }
@@ -226,7 +226,7 @@ private struct ParentBreadcrumb: View {
     var body: some View {
         if let parent = parents.first {
             Label(parent.title, systemImage: "arrow.turn.left.up")
-                .font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                .font(.system(size: 11.5)).foregroundStyle(BunnyTheme.secondary).lineLimit(1)
         }
     }
 }
@@ -261,7 +261,7 @@ private struct PanelMetaLine: View {
                     Label("\(done)/\(children.count) subtasks", systemImage: "checklist")
                 }
             }
-            .font(.system(size: 11.5)).foregroundStyle(.secondary)
+            .font(.system(size: 11.5)).foregroundStyle(BunnyTheme.secondary)
             .labelStyle(.titleAndIcon)
         }
     }

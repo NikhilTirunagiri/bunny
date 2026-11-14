@@ -25,7 +25,14 @@ struct NoteFieldView: View {
 
     private static let radius: CGFloat = 10
     private static let buttonSize: CGFloat = 26
-    private var fieldFill: some ShapeStyle { .quaternary.opacity(0.6) }
+    /// The field with one line of text, the same in New note and in Search: the two kinds of text
+    /// field are not the same height (the growing one is 1 pt taller), so the height is not left to them.
+    private static let height: CGFloat = 37
+    /// From the field's top edge to the text, in both.
+    private static let textInset: CGFloat = 9
+    private var fieldFill: some ShapeStyle { BunnyTheme.surface(dark: .quaternary.opacity(0.6)) }
+    /// The round search button, which sits on the field.
+    private var buttonFill: some ShapeStyle { BunnyTheme.deepSurface(dark: .quaternary.opacity(0.6)) }
 
     /// The quick-capture offer: only while a new note is being typed, never in search.
     private var offer: AttachmentRules.ClipboardKind? {
@@ -83,7 +90,7 @@ struct NoteFieldView: View {
             .overlay(alignment: .trailing) {
                 // The round button's background; it grows into the search field's.
                 RoundedRectangle(cornerRadius: searching ? Self.radius : Self.buttonSize / 2, style: .continuous)
-                    .fill(fieldFill)
+                    .fill(searching ? AnyShapeStyle(fieldFill) : AnyShapeStyle(buttonFill))
                     .frame(maxWidth: searching ? .infinity : Self.buttonSize,
                            maxHeight: searching ? .infinity : Self.buttonSize)
                     .padding(.trailing, searching ? 0 : 5)
@@ -96,7 +103,7 @@ struct NoteFieldView: View {
                     Button { coordinator.startSearch() } label: {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(BunnyTheme.secondary)
                     }
                     .buttonStyle(BunnyButtonStyle(kind: .icon(Self.buttonSize)))
                     .help("Search notes (⌘F)")
@@ -122,12 +129,12 @@ struct NoteFieldView: View {
             HStack(spacing: RowMetrics.spacing) {
                 Image(systemName: kind == .image ? "photo" : "doc")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BunnyTheme.secondary)
                     .frame(width: RowMetrics.checkbox, height: RowMetrics.checkbox)
-                    .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 5, style: .continuous))
+                    .background(fieldFill, in: .rect(cornerRadius: 5, style: .continuous))
                 Text(AttachmentRules.offerLabel(kind))
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BunnyTheme.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 keyHint("tab")
@@ -143,7 +150,7 @@ struct NoteFieldView: View {
     private func keyHint(_ key: String) -> some View {
         Text(key)
             .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(BunnyTheme.tertiary)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(.quaternary))
@@ -156,7 +163,7 @@ struct NoteFieldView: View {
         HStack(alignment: .firstTextBaseline, spacing: RowMetrics.spacing) {
             Image(systemName: "plus")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BunnyTheme.secondary)
                 .frame(width: RowMetrics.checkbox)
             TextField("New note", text: $newText, axis: .vertical)
                 .lineLimit(coordinator.searching ? 1...1 : 1...4)
@@ -168,7 +175,8 @@ struct NoteFieldView: View {
         .padding(.leading, RowMetrics.gutter)
         // Room for the search button.
         .padding(.trailing, Self.buttonSize + 10)
-        .padding(.vertical, 9)
+        .padding(.vertical, Self.textInset)
+        .frame(minHeight: Self.height)
         .background(fieldFill, in: .rect(cornerRadius: Self.radius, style: .continuous))
     }
 
@@ -177,7 +185,7 @@ struct NoteFieldView: View {
         return HStack(spacing: RowMetrics.spacing) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BunnyTheme.secondary)
                 .frame(width: RowMetrics.checkbox)
             TextField("Search notes", text: $coordinator.searchQuery)
                 .textFieldStyle(.plain)
@@ -187,5 +195,7 @@ struct NoteFieldView: View {
         }
         .padding(.leading, RowMetrics.gutter)
         .padding(.trailing, 10)
+        .padding(.top, Self.textInset)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }

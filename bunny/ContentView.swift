@@ -33,7 +33,7 @@ struct MainWindowView: View {
         // Solid for now: glass left a ghost of the card on screen for a moment after closing.
         // (When glass returns it must be a background, never `.glassEffect` on the content: that
         // stops every SwiftUI drop target inside from receiving drags.)
-        .background { card.fill(Color(nsColor: .windowBackgroundColor)) }
+        .background { card.fill(BunnyTheme.background()) }
         .overlay { card.strokeBorder(.separator, lineWidth: 1).allowsHitTesting(false) }
         .background { shadow }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: edge)
@@ -251,7 +251,7 @@ struct ContentView: View {
                 Text("\(count) completed")
                     .font(.system(size: 12, weight: .medium))
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(BunnyTheme.secondary)
             .padding(.leading, RowMetrics.gutter)
             .padding(.vertical, 7)
         }
@@ -263,10 +263,10 @@ struct ContentView: View {
         VStack(spacing: 4) {
             Text(title)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BunnyTheme.secondary)
             Text(caption)
                 .font(.system(size: 12))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(BunnyTheme.tertiary)
         }
         .allowsHitTesting(false)
     }
