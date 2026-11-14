@@ -94,7 +94,8 @@ enum DataActions {
     static func confirmResetSettings() {
         guard confirm("Reset all settings?",
                       detail: "Every setting returns to its default: appearance, shortcut, agents, folders, retention times. " +
-                              "Your notes, attachments and Trash are not touched. Bunny will restart.",
+                              "Your notes, attachments and Trash are not touched. Bunny will restart. " +
+                              "If you installed Bunny tools into Claude Code or Codex, install them again afterwards.",
                       action: "Reset and Restart") else { return }
         resetSettingsAndRestart()
     }
