@@ -47,7 +47,7 @@ struct TimerPickerView: View {
                         task.timerStartedAt = nil
                         dismiss()
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bunny)
                 }
                 Spacer()
                 Button("Start") {
@@ -55,12 +55,13 @@ struct TimerPickerView: View {
                     guard duration > 0 else { return }
                     task.timerDuration = duration
                     task.timerStartedAt = Date()
+                    NotificationPermission.request()
                     if !task.isSubtask {
                         if showInMenuBar { TaskActions.pin(task) } else { TaskActions.unpin(task) }
                     }
                     dismiss()
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.bunnyProminent)
                 .disabled(totalSeconds == 0)
             }
         }
@@ -113,10 +114,11 @@ struct TimerPickerView: View {
                     }
                 } label: {
                     Image(systemName: "minus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                        .background(Color.primary.opacity(0.06), in: .circle)
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .controlSize(.small)
+                .buttonStyle(BunnyButtonStyle(kind: .icon(22)))
 
                 TextField("", text: text)
                     .multilineTextAlignment(.center)
@@ -138,10 +140,11 @@ struct TimerPickerView: View {
                     }
                 } label: {
                     Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                        .background(Color.primary.opacity(0.06), in: .circle)
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .controlSize(.small)
+                .buttonStyle(BunnyButtonStyle(kind: .icon(22)))
             }
         }
     }

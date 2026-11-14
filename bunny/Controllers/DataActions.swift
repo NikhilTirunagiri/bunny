@@ -84,6 +84,50 @@ enum DataActions {
         PanelCoordinator.shared.dataErased()
     }
 
+    // MARK: - Reset settings
+
+    /// Stored values that are not settings and survive a reset: Welcome was seen (a reset must not
+    /// show it again) and where the Settings window sits.
+    static let resetKeepList: Set<String> = [WindowManager.onboardingCompletedKey, WindowManager.settingsFrameKey]
+
+    /// Asks, then returns every setting to its default and restarts Bunny. Notes are not touched.
+    static func confirmResetSettings() {
+        guard confirm("Reset all settings?",
+                      detail: "Every setting returns to its default: appearance, shortcut, agents, folders, retention times. " +
+                              "Your notes, attachments and Trash are not touched. Bunny will restart.",
+                      action: "Reset and Restart") else { return }
+        resetSettingsAndRestart()
+    }
+
+    /// Stops the agents as quitting does, clears the preferences, then starts a new Bunny and quits
+    /// this one, so everything starts again from defaults.
+    private static func resetSettingsAndRestart() {
+        AgentSupervisor.shared.shutdownAll()
+        BunnyToolsServer.shared.stop()
+        GlobalHotKey.shared.unregister()
+        if LaunchAtLogin.isEnabled { LaunchAtLogin.set(false) }
+        resetSettings()
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+            if let error { NSLog("Bunny: restarting after the reset failed: %@", error.localizedDescription) }
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+    }
+
+    /// Removes every stored preference of Bunny except the keep-list, then stores the agent and
+    /// Bunny tools switches as off (what a fresh install has after its first launch).
+    private static func resetSettings() {
+        let defaults = UserDefaults.standard
+        let stored = Bundle.main.bundleIdentifier.flatMap(defaults.persistentDomain(forName:)) ?? [:]
+        for key in SettingsReset.keysToRemove(from: stored, keeping: resetKeepList) {
+            defaults.removeObject(forKey: key)
+        }
+        AgentSettings.storeEverythingOff()
+        defaults.synchronize()
+    }
+
     /// Cancel is the default button (Return); the destructive one is second.
     private static func confirm(_ message: String, detail: String, action: String) -> Bool {
         let alert = NSAlert()

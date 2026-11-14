@@ -56,9 +56,25 @@ enum ShelfService {
     static func remove(_ item: ShelfItem, in context: ModelContext) {
         if item.isOwned, AttachmentRules.isStored(path: item.lastKnownPath, applicationSupport: applicationSupport) {
             try? FileManager.default.removeItem(atPath: item.lastKnownPath)
+            removeFolderIfEmpty(URL(fileURLWithPath: item.lastKnownPath).deletingLastPathComponent())
         }
         AttachmentThumbnails.drop(item.id)
         context.delete(item)
+    }
+
+    /// Removes note folders under Attachments that hold no files any more (housekeeping).
+    static func removeEmptyFolders() {
+        let root = AttachmentRules.root(applicationSupport: applicationSupport)
+        let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        for folder in folders { removeFolderIfEmpty(folder) }
+    }
+
+    /// Only a folder with nothing in it (a stray `.DS_Store` does not count as content).
+    private static func removeFolderIfEmpty(_ folder: URL) {
+        guard folder.hasDirectoryPath || (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
+              let contents = try? FileManager.default.contentsOfDirectory(atPath: folder.path),
+              contents.allSatisfy({ $0 == ".DS_Store" }) else { return }
+        try? FileManager.default.removeItem(at: folder)
     }
 
     /// Removes every attachment of a note that is being deleted for good, and its folder of stored files.

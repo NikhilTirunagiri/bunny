@@ -46,5 +46,6 @@ final class MidnightScheduler {
         guard let context = modelContext else { return }
         TaskActions.trashExpiredCompleted(in: context)
         TaskActions.purgeExpiredTrash(in: context)
+        ShelfService.removeEmptyFolders()
     }
 }

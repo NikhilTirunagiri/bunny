@@ -1,20 +1,24 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Settings → Agents: which CLIs were found, the defaults a hand-off uses, and under Advanced the CLI
-/// paths, per-agent model and effort, permissions, and Bunny tools (the local MCP server and its
-/// global install). `@State` mirrors are seeded from `AgentSettings` when the page appears; a control
-/// writes its setting when the user changes it. A CLI path that is empty on appear triggers
-/// `AgentSettings.detect` off the main thread.
+/// Settings → Agents: an on/off switch per agent with whether its CLI was found, the defaults a
+/// hand-off uses, and under Advanced the CLI paths, per-agent model and effort, permissions, and Bunny
+/// tools (the local MCP server, its switch and its global install). With both agents off the page is
+/// just the two switches and a line saying so. `@State` mirrors are seeded from `AgentSettings` when
+/// the page appears; a control writes its setting when the user changes it. A switched-on agent whose
+/// CLI path is empty on appear triggers `AgentSettings.detect` off the main thread.
 struct AgentsSettingsPage: View {
     @Environment(\.settingsLive) private var live
     @Environment(SettingsModel.self) private var model
 
-    @State private var defaultHarness: AgentHarness = .claudeCode
+    private let enablement = AgentEnablement.shared
     @State private var claudePath = ""
     @State private var codexPath = ""
     @State private var autonomy: AgentAutonomy = .askFirst
-    @State private var openIn: OpenInApp = .terminal
+    @State private var openIn: [AgentHarness: OpenInApp] = [:]
+    /// Each agent's remembered "Other App…" pick.
+    @State private var customApps: [AgentHarness: AgentSettings.CustomApp] = [:]
     /// The chosen default folder; nil = Bunny's own folder.
     @State private var customFolder: String?
     @State private var folderNote: String?
@@ -22,6 +26,8 @@ struct AgentsSettingsPage: View {
     // MARK: - Model & effort
 
     private static let customKey = "__custom__"
+    /// One width for the four model and effort menus, so they line up.
+    private static let modelPickerWidth: CGFloat = 150
     private static let claudeModelChoices = [""] + AgentModelOptions.claudeModelAliases + [customKey]
     private static let efforts = [""] + AgentModelOptions.claudeEfforts
 
@@ -51,41 +57,43 @@ struct AgentsSettingsPage: View {
         .onAppear(perform: load)
         // A stored model id that matches a just-fetched model is no longer "Custom".
         .onChange(of: codexModelStore.models) { reconcileCodexModelChoice() }
+        if enablement.anyEnabled {
+            options
+        } else {
+            SettingsNote("Turn on an agent to hand notes to it. While both are off, Bunny runs nothing for agents.")
+                .padding(.horizontal, SettingsMetrics.rowPadding)
+        }
+    }
+
+    @ViewBuilder
+    private var options: some View {
         SettingsCard {
             SettingsRow(.defaultAgent, caption: "The agent a hand-off uses unless the note says otherwise.") {
-                Picker("", selection: stored($defaultHarness) { AgentSettings.defaultHarness = $0 }) {
-                    ForEach(AgentHarness.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                }
-                .labelsHidden()
-                .fixedSize()
+                PopUpButton(selection: defaultHarnessSelection,
+                            options: enablement.available.map { .init(value: $0, title: $0.displayName, logo: $0) })
             }
-            SettingsRow(.openSessionsIn, caption: "Where Open session shows an agent's full log.") {
-                Picker("", selection: stored($openIn) { AgentSettings.openIn = $0 }) {
-                    ForEach(OpenInApp.allCases, id: \.self) { app in
-                        Text(app.displayName).tag(app)
-                            .selectionDisabled(!AgentSettings.isInstalled(app))
-                    }
+            if enablement.isEnabled(.claudeCode) {
+                SettingsRow(.openClaudeSessionsIn, caption: "Where a Claude Code session opens with its full log.") {
+                    openInButton(.claudeCode)
                 }
-                .labelsHidden()
-                .fixedSize()
             }
-            SettingsRow(.defaultFolder, caption: "Where an agent works when the note has no folder.") {
-                Picker("", selection: folderSelection) {
-                    Text("Bunny folder").tag("bunny")
-                    if let customFolder {
-                        Text(URL(fileURLWithPath: customFolder).lastPathComponent).tag("custom")
-                    }
-                    Divider()
-                    Text("Choose…").tag("choose")
+            if enablement.isEnabled(.codex) {
+                SettingsRow(.openCodexSessionsIn, caption: "Where a Codex session opens with its full log.") {
+                    openInButton(.codex)
                 }
-                .labelsHidden()
-                .fixedSize()
+            }
+            SettingsRow(.defaultFolder, caption: "Where an agent works when the note has no folder of its own.") {
+                PopUpButton(selection: folderSelection, options: [.init(value: "bunny", title: "Bunny folder")]
+                            + (customFolder.map { [.init(value: "custom", title: URL(fileURLWithPath: $0).lastPathComponent)] } ?? [])
+                            + [nil, .init(value: "choose", title: "Choose…")])
             } detail: {
                 if let customFolder {
                     SettingsNote((customFolder as NSString).abbreviatingWithTildeInPath)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .help(customFolder)
+                } else {
+                    SettingsNote("An empty folder of Bunny's own for each agent, for notes that need no project.")
                 }
                 if let folderNote { SettingsNote(folderNote, color: .orange) }
             }
@@ -115,11 +123,7 @@ struct AgentsSettingsPage: View {
         SettingsHeading("Model & effort")
         SettingsCard {
             SettingsRow(.claudeModel) {
-                Picker("", selection: claudeModelSelection) {
-                    ForEach(Self.claudeModelChoices, id: \.self) { Text(Self.claudeModelLabel($0)).tag($0) }
-                }
-                .labelsHidden()
-                .fixedSize()
+                modelPicker(claudeModelSelection, Self.claudeModelChoices.map { .init(value: $0, title: Self.claudeModelLabel($0)) })
             } detail: {
                 if claudeModelChoice == Self.customKey {
                     TextField("Model id (e.g. claude-opus-5-5)", text: stored($claudeModelCustomText) {
@@ -129,20 +133,13 @@ struct AgentsSettingsPage: View {
                 }
             }
             SettingsRow(.claudeEffort) {
-                Picker("", selection: stored($claudeEffort) { AgentSettings.setEffort($0, for: .claudeCode) }) {
-                    ForEach(Self.efforts, id: \.self) { Text($0.isEmpty ? "Default" : $0).tag($0) }
-                }
-                .labelsHidden()
-                .fixedSize()
+                modelPicker(stored($claudeEffort) { AgentSettings.setEffort($0, for: .claudeCode) },
+                            Self.efforts.map { .init(value: $0, title: $0.isEmpty ? "Default" : AgentModelOptions.displayName($0)) })
             }
             SettingsRow(.codexModel) {
-                Picker("", selection: codexModelSelection) {
-                    Text("Default").tag("")
-                    ForEach(codexModels, id: \.id) { Text($0.displayName).tag($0.id) }
-                    Text("Custom…").tag(Self.customKey)
-                }
-                .labelsHidden()
-                .fixedSize()
+                modelPicker(codexModelSelection, [.init(value: "", title: "Default")]
+                            + codexModels.map { .init(value: $0.id, title: $0.displayName) }
+                            + [.init(value: Self.customKey, title: "Custom…")])
             } detail: {
                 if codexModelStore.isLoading && codexModels.isEmpty {
                     HStack(spacing: 6) {
@@ -159,24 +156,18 @@ struct AgentsSettingsPage: View {
                 }
             }
             SettingsRow(.codexEffort) {
-                Picker("", selection: stored($codexEffort) { AgentSettings.setEffort($0, for: .codex) }) {
-                    Text("Default").tag("")
-                    ForEach(codexEffortOptions(), id: \.self) { Text($0).tag($0) }
-                }
-                .labelsHidden()
-                .fixedSize()
+                modelPicker(stored($codexEffort) { AgentSettings.setEffort($0, for: .codex) }, [.init(value: "", title: "Default")]
+                            + codexEffortOptions().map { .init(value: $0, title: AgentModelOptions.displayName($0)) })
             }
         }
 
         SettingsHeading("Permissions")
         SettingsCard {
             SettingsRow(.permissions) {
-                Picker("", selection: stored($autonomy) { AgentSettings.autonomy = $0 }) {
-                    Text("Ask before running commands").tag(AgentAutonomy.askFirst)
-                    Text("Autonomous").tag(AgentAutonomy.autonomous)
-                }
-                .labelsHidden()
-                .fixedSize()
+                PopUpButton(selection: stored($autonomy) { AgentSettings.autonomy = $0 }, options: [
+                    .init(value: .askFirst, title: "Ask before running commands"),
+                    .init(value: .autonomous, title: "Autonomous"),
+                ])
             } detail: {
                 if autonomy == .autonomous {
                     SettingsNote("Agents run commands and change files without asking you first.", color: .orange)
@@ -186,16 +177,24 @@ struct AgentsSettingsPage: View {
 
         SettingsHeading("Bunny tools")
         SettingsCard {
-            SettingsRow(.toolsServer, caption: toolsServer.port.map { "Running on port \($0)." } ?? "Not running.") {
-                Button("Copy MCP URL") { copyToolsURL() }
-                    .buttonStyle(.bunny)
+            SettingsRow(.toolsServer, caption: "Lets agents read and create your Bunny notes.") {
+                SettingsSwitch(isOn: Binding(get: { enablement.tools }, set: { enablement.setTools($0) }))
             } detail: {
-                Text(AgentSettings.toolsURL)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(BunnyTheme.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
+                if enablement.tools, live ? toolsServer.isRunning : true {
+                    HStack(spacing: 8) {
+                        Text(AgentSettings.toolsURL)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(BunnyTheme.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                        Spacer(minLength: 4)
+                        Button("Copy URL") { copyToolsURL() }
+                            .buttonStyle(.bunny)
+                    }
+                } else if enablement.tools {
+                    SettingsNote("Not running.")
+                }
                 if isOnFallbackPort, let boundPort = toolsServer.port {
                     SettingsNote("Port \(AgentSettings.toolsPort) was busy; Bunny is using \(boundPort). " +
                                  "Global tools use port \(AgentSettings.toolsPort), so they can't reach Bunny and " +
@@ -205,6 +204,7 @@ struct AgentsSettingsPage: View {
             SettingsRow(.toolsToken, caption: "What agents show the server to be let in.") {
                 Button("Regenerate") { regenerateToken() }
                     .buttonStyle(.bunny)
+                    .disabled(!enablement.tools)
             } detail: {
                 if tokenRegenerated {
                     SettingsNote("New token in use. Uninstall and install the global tools again so they use it.", color: .orange)
@@ -213,9 +213,18 @@ struct AgentsSettingsPage: View {
             bunnyToolsRow(.toolsClaude, .claudeCode)
             bunnyToolsRow(.toolsCodex, .codex)
         }
+        if !enablement.tools {
+            SettingsNote("Turn on the Bunny tools server to change the token or install the tools.")
+                .padding(.horizontal, SettingsMetrics.rowPadding)
+        }
         SettingsNote("Installing writes Bunny's access token to ~/.claude.json and ~/.codex/config.toml. " +
                      "Any program running as you can read it. Uninstall removes it.")
             .padding(.horizontal, SettingsMetrics.rowPadding)
+    }
+
+    /// One of the four model and effort menus: all the same width, at the row's trailing edge.
+    private func modelPicker(_ selection: Binding<String>, _ options: [PopUpButton.Option<String>]) -> some View {
+        PopUpButton(selection: selection, options: options, width: Self.modelPickerWidth)
     }
 
     /// The control shows `state`; a change by the user is also written with `save`. Seeding the
@@ -236,19 +245,41 @@ struct AgentsSettingsPage: View {
         live ? FileManager.default.isExecutableFile(atPath: path) : !path.isEmpty
     }
 
+    /// The switch at the trailing edge; while on, whether the CLI was found. Off: nothing is looked up.
     private func agentRow(_ harness: AgentHarness, path: String, installHint: String) -> some View {
+        let on = enablement.isEnabled(harness)
         let found = isFound(path)
         return SettingsRow(harness == .claudeCode ? .claudeCode : .codex,
-                           caption: found ? nil : "Install it with \(installHint), or set its path under Advanced.") {
-            // The on/off switch of the next phase goes after the status, at the trailing edge.
+                           caption: !on ? "Off" : found ? nil : "Install it with \(installHint), or set its path under Advanced.") {
             HStack(spacing: 10) {
-                Label(found ? "Found" : "Not found", systemImage: found ? "checkmark.circle.fill" : "minus.circle")
-                    .font(.callout)
-                    // Plain green is too faint as text on the light card.
-                    .foregroundStyle(found ? Color.green.mix(with: .primary, by: 0.25) : Color.secondary)
-                    .help(found ? path : "\(AgentSettings.commandName(for: harness)) was not found")
+                AgentLogo(harness: harness, size: 16)
+                    .opacity(on ? 1 : 0.4)
+                if on {
+                    Label(found ? "Found" : "Not found", systemImage: found ? "checkmark.circle.fill" : "minus.circle")
+                        .font(.callout)
+                        // Plain green is too faint as text on the light card.
+                        .foregroundStyle(found ? Color.green.mix(with: .primary, by: 0.25) : Color.secondary)
+                        .help(found ? path : "\(AgentSettings.commandName(for: harness)) was not found")
+                }
+                SettingsSwitch(isOn: Binding(get: { on }, set: { setEnabled($0, harness) }))
             }
         }
+    }
+
+    /// Switching on looks for the CLI right then (`AgentEnablement.setEnabled`) and shows what it found.
+    private func setEnabled(_ on: Bool, _ harness: AgentHarness) {
+        guard live else { return }
+        enablement.setEnabled(on, for: harness) { located in
+            if let located { showDetected(located, for: harness) }
+        }
+    }
+
+    /// The default agent among the switched-on ones (the other one while the stored default is off).
+    private var defaultHarnessSelection: Binding<AgentHarness> {
+        Binding(
+            get: { enablement.defaultHarness ?? .claudeCode },
+            set: { enablement.setDefault($0) }
+        )
     }
 
     // MARK: - CLI paths
@@ -311,6 +342,55 @@ struct AgentsSettingsPage: View {
         pathBinding(harness).wrappedValue = url.path
     }
 
+    // MARK: - Open sessions in
+
+    /// Terminal, VS Code and the agent's own desktop app (disabled when not installed), then the app
+    /// picked with "Other App…" by its name, then "Other App…".
+    private func openInButton(_ harness: AgentHarness) -> some View {
+        let current = openIn[harness] ?? .terminal
+        let custom = customApps[harness]
+        return PopUpButton(value: current == .custom ? custom?.name ?? "" : current.displayName) {
+            var items: [PopUpMenu.Item?] = OpenInApp.builtIn(for: harness).map { app in
+                PopUpMenu.Item(title: app.displayName, checked: app == current,
+                               enabled: AgentSettings.isInstalled(app, for: harness)) {
+                    setOpenIn(app, for: harness)
+                }
+            }
+            items.append(nil)
+            if let custom {
+                items.append(PopUpMenu.Item(title: custom.name, checked: current == .custom) {
+                    setOpenIn(.custom, for: harness)
+                })
+            }
+            items.append(PopUpMenu.Item(title: "Other App…") { chooseApp(harness) })
+            return items
+        }
+    }
+
+    private func setOpenIn(_ app: OpenInApp, for harness: AgentHarness) {
+        openIn[harness] = app
+        AgentSettings.setOpenIn(app, for: harness)
+    }
+
+    /// The picked app replaces the agent's remembered one and becomes its choice.
+    private func chooseApp(_ harness: AgentHarness) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        panel.prompt = "Choose"
+        panel.message = "Choose a terminal or editor. Apps that cannot open an agent session are greyed out."
+        let filter = SessionAppFilter()
+        panel.delegate = filter
+        guard panel.runModal() == .OK, let url = panel.url, filter.canOpenSessions(url) else { return }
+        let app = AgentSettings.CustomApp(url: url)
+        customApps[harness] = app
+        AgentSettings.setCustomApp(app, for: harness)
+        setOpenIn(.custom, for: harness)
+    }
+
     // MARK: - Default folder
 
     private var folderSelection: Binding<String> {
@@ -321,7 +401,7 @@ struct AgentsSettingsPage: View {
                 case "bunny":
                     customFolder = nil
                     folderNote = nil
-                    AgentSettings.defaultWorkspace = ""
+                    AgentSettings.defaultFolder = nil
                 case "choose": chooseFolder()
                 default: break
                 }
@@ -338,13 +418,13 @@ struct AgentsSettingsPage: View {
         panel.prompt = "Choose"
         if let customFolder { panel.directoryURL = URL(fileURLWithPath: customFolder) }
         guard panel.runModal() == .OK, let url = panel.urls.first else { return }
-        guard AgentSettings.notHome(url.path) == url.path else {
+        guard !AgentSettings.isHome(url.path) else {
             folderNote = "The home folder can't be used: an agent could change everything in it."
             return
         }
         folderNote = nil
         customFolder = url.path
-        AgentSettings.defaultWorkspace = url.path
+        AgentSettings.defaultFolder = url.path
     }
 
     // MARK: - Model & effort
@@ -359,7 +439,7 @@ struct AgentsSettingsPage: View {
         switch raw {
         case "": return "Default"
         case customKey: return "Custom…"
-        default: return raw
+        default: return AgentModelOptions.displayName(raw)
         }
     }
 
@@ -449,7 +529,7 @@ struct AgentsSettingsPage: View {
         case .notInstalled, .none:
             Button("Install") { performTools(harness, install: true) }
                 .buttonStyle(.bunny)
-                .disabled(busy || isOnFallbackPort)
+                .disabled(busy || isOnFallbackPort || !enablement.tools)
         }
     }
 
@@ -494,16 +574,17 @@ struct AgentsSettingsPage: View {
             toolsStatus = [.claudeCode: .installed, .codex: .notInstalled]
             return
         }
-        defaultHarness = AgentSettings.defaultHarness
         claudePath = AgentSettings.claudePath
         codexPath = AgentSettings.codexPath
         autonomy = AgentSettings.autonomy
-        // Never a blank picker: an uninstalled stored app shows (and opens in) Terminal.
-        openIn = AgentSettings.isInstalled(AgentSettings.openIn) ? AgentSettings.openIn : .terminal
-        let folder = AgentSettings.defaultWorkspace
-        customFolder = folder == AgentSettings.bunnyFolder ? nil : folder
-        detectIfEmpty(.claudeCode)
-        detectIfEmpty(.codex)
+        for harness in AgentHarness.allCases {
+            customApps[harness] = AgentSettings.customApp(for: harness)
+            // Never a blank picker: a stored app that is gone shows (and opens in) Terminal.
+            let stored = AgentSettings.openIn(for: harness)
+            openIn[harness] = AgentSettings.isInstalled(stored, for: harness) ? stored : .terminal
+        }
+        customFolder = AgentSettings.defaultFolder
+        for harness in enablement.available { detectIfEmpty(harness) }
 
         let storedClaudeModel = AgentSettings.model(for: .claudeCode)
         if Self.claudeModelChoices.contains(storedClaudeModel) {
@@ -517,7 +598,7 @@ struct AgentsSettingsPage: View {
 
         reconcileCodexModelChoice()
         codexEffort = AgentSettings.effort(for: .codex)
-        // Refresh on every open: the account's model list can change while Bunny runs.
+        // Refresh on every open (Codex on only): the account's model list can change while Bunny runs.
         codexModelStore.refresh()
     }
 
@@ -533,5 +614,17 @@ struct AgentsSettingsPage: View {
                 AgentSettings.setCLIPath(path.wrappedValue, for: harness)
             }
         }
+    }
+}
+
+/// Greys out, in the "Other App…" picker, every app that could not open an agent session
+/// (`SessionLaunchPlanner.canOpenSessions`). Folders stay enabled for navigation.
+private final class SessionAppFilter: NSObject, NSOpenSavePanelDelegate {
+    func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
+        url.pathExtension == "app" ? canOpenSessions(url) : true
+    }
+
+    func canOpenSessions(_ url: URL) -> Bool {
+        AgentSettings.canOpenSessions(url)
     }
 }

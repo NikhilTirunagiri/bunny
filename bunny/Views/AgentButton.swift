@@ -5,9 +5,9 @@ extension Color {
     static var agentNeedsInput: Color { .yellow.mix(with: .orange, by: 0.35) }
 }
 
-/// Hand off, the one hover action of a row: starts a background run with the note's agent (the one
-/// picked in its right-click menu, else Settings' default). The row shows it only while the note has no
-/// session and no active run, so a click always starts a run.
+/// Hand off, the one hover action of a row: starts a background run at once with the note's agent
+/// (the one picked in its options card, else Settings' default). The row shows it only while an agent
+/// is switched on and the note has no session and no active run, so a click always starts a run.
 struct AgentButton: View {
     @Bindable var task: BunnyTask
 
@@ -24,12 +24,7 @@ struct AgentButton: View {
         } label: {
             AgentLogo(harness: runSettings.harness, size: 12)
         }
-        .buttonStyle(.bunnyRowIcon)
+        .buttonStyle(.bunnyRowIcon.lively())
         .help("Hand off to \(RunSettingsResolver.caption(runSettings))")
-        .contextMenu {
-            if AgentConfigMenu.isAvailable(for: task) {
-                AgentConfigMenu(task: task)
-            }
-        }
     }
 }

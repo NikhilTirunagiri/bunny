@@ -26,15 +26,6 @@ struct LiveAgentRunnerTests {
         try await runLiveTools(harness: .codex, cli: "codex", model: model, effort: "low") { CodexRunner(options: $0) }
     }
 
-    private func liveEnvironment() -> [String: String] {
-        var environment = ShellEnvironment.environment()
-        // Tests may run inside a Claude Code session; don't let the child think it is nested.
-        for key in environment.keys where key.hasPrefix("CLAUDECODE") || key.hasPrefix("CLAUDE_CODE_") {
-            environment[key] = nil
-        }
-        return environment
-    }
-
     private func runLiveTools(
         harness: AgentHarness,
         cli: String,
@@ -60,7 +51,7 @@ struct LiveAgentRunnerTests {
         let port = try #require(firstLine.split(separator: " ").last.flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) })
 
         let taskID = UUID()
-        var options = AgentRunOptions(cliPath: path, autonomy: .autonomous, environment: liveEnvironment())
+        var options = AgentRunOptions(cliPath: path, autonomy: .autonomous, environment: ShellEnvironment.environment())
         options.model = model
         options.effort = effort
         options.tools = BunnyToolsEndpoint(url: "http://127.0.0.1:\(port)/mcp", token: token, taskID: taskID)
@@ -101,7 +92,7 @@ struct LiveAgentRunnerTests {
 
     private func runLive(harness: AgentHarness, cli: String, make: (AgentRunOptions) -> AgentRunner) async throws {
         let path = try #require(ShellEnvironment.locate(cli), "\(cli) not found on the login PATH")
-        let runner = make(AgentRunOptions(cliPath: path, autonomy: .autonomous, environment: liveEnvironment()))
+        let runner = make(AgentRunOptions(cliPath: path, autonomy: .autonomous, environment: ShellEnvironment.environment()))
         let recorder = EventRecorder(runner)
         defer { runner.terminate() }
 

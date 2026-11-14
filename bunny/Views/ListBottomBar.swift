@@ -15,31 +15,71 @@ struct ListBottomBar: View {
             Button {
                 if inTrash { coordinator.leaveTrash() } else { coordinator.showTrash() }
             } label: {
-                icon("trash", tint: inTrash ? Color.accentColor : Self.trashTint)
+                pillLabel("trash", "Trash", iconTint: inTrash ? Color.accentColor : Self.trashTint,
+                          textTint: inTrash ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(BunnyTheme.secondary))
             }
-            .buttonStyle(BunnyButtonStyle(kind: .icon(28), selected: inTrash))
+            .buttonStyle(BarPillStyle(selected: inTrash))
             .help(inTrash ? "Back to notes" : "Trash")
             Spacer()
-            Button { WindowManager.shared.showSettings() } label: { icon("gearshape", tint: .secondary) }
-                .buttonStyle(.bunnyIcon)
-                .help("Settings (⌘,)")
+            Button { WindowManager.shared.showSettings() } label: {
+                pillLabel("gearshape", "Settings", iconTint: nil, textTint: AnyShapeStyle(BunnyTheme.secondary))
+            }
+            .buttonStyle(BarPillStyle())
+            .help("Settings (⌘,)")
         }
-        // The icons sit in the checkbox column on the left and under the search button on the right.
-        .padding(.leading, 20)
-        .padding(.trailing, 14)
+        // The two pills mirror each other: the same inset from each edge of the list column.
+        .padding(.horizontal, 14)
         .frame(height: 44)
         .overlay(alignment: .top) { Divider().opacity(0.6) }
     }
 
-    /// Fitted into one square, so a tall symbol (the trash can) and a round one (the gear) come out
-    /// the same optical size on the same centre line.
-    private func icon(_ symbol: String, tint: Color) -> some View {
-        Image(systemName: symbol)
-            .resizable()
-            .scaledToFit()
-            .fontWeight(.regular)
-            .frame(width: 15, height: 15)
-            .foregroundStyle(tint)
+    /// Icon + word, both the same in the two pills. The icon is fitted into one square, so a tall
+    /// symbol (the trash can) and a round one (the gear) come out the same optical size.
+    private func pillLabel(_ symbol: String, _ title: String, iconTint: Color?, textTint: AnyShapeStyle) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .resizable()
+                .scaledToFit()
+                .fontWeight(.medium)
+                .frame(width: 13, height: 13)
+                .foregroundStyle(iconTint.map(AnyShapeStyle.init) ?? textTint)
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(textTint)
+        }
+    }
+}
+
+/// The bottom bar's buttons (Trash, Settings): a quiet pill, a surface fill with a hairline border. A faint
+/// wash on hover, a stronger one and a slight press-in while pressed (none under Reduce Motion).
+private struct BarPillStyle: ButtonStyle {
+    /// The view this button leads to is showing (Trash): an accent-tinted fill and border.
+    var selected = false
+
+    func makeBody(configuration: Configuration) -> some View { Content(configuration: configuration, selected: selected) }
+
+    private struct Content: View {
+        let configuration: Configuration
+        let selected: Bool
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @State private var isHovered = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+            let wash = configuration.isPressed ? 0.10 : isHovered ? 0.05 : 0
+            configuration.label
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(Color.primary.opacity(wash), in: shape)
+                .background(selected ? AnyShapeStyle(Color.accentColor.opacity(0.16))
+                                     : AnyShapeStyle(BunnyTheme.surface(dark: Color.primary.opacity(0.06))), in: shape)
+                .overlay(shape.strokeBorder(selected ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.1), lineWidth: 0.5))
+                .contentShape(shape)
+                .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: configuration.isPressed)
+                .onHover { isHovered = $0 }
+        }
     }
 }
 

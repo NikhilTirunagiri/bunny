@@ -8,6 +8,10 @@ final class WindowManager: NSObject, NSWindowDelegate {
     static let shared = WindowManager()
     private static let settingsSize = NSSize(width: 780, height: 540)
     private static let settingsMinSize = NSSize(width: 680, height: 420)
+    private static let settingsFrameName = "BunnySettings"
+    /// Where AppKit stores the Settings window's frame in the preferences.
+    static let settingsFrameKey = "NSWindow Frame \(settingsFrameName)"
+    static let onboardingCompletedKey = "onboarding.completed"
 
     /// The notes store, for Settings → Data. Set at launch.
     var modelContainer: ModelContainer?
@@ -19,16 +23,19 @@ final class WindowManager: NSObject, NSWindowDelegate {
     private var onboardingWindow: NSWindow?
     private let settingsModel = SettingsModel()
 
-    /// Shows the one Settings window, on `page` or where it was left.
+    /// Shows the Settings window, on `page` or where it was left. A closed window is never shown
+    /// again (see `present`): each open after a close makes a new one, at the remembered frame.
     func showSettings(page: SettingsCatalog.Page? = nil) {
         guard let modelContainer else { return }
         if let page { settingsModel.page = page }
-        let window = settingsWindow ?? makeSettingsWindow(
-            root: SettingsView().environment(settingsModel).modelContainer(modelContainer))
-        settingsWindow = window
-        // Every open starts with nothing focused, whatever was being edited when it closed.
-        if !window.isVisible { window.dropFocus() }
-        present(window)
+        present(self.settingsWindow) { [self] in
+            let window = makeSettingsWindow(
+                root: SettingsView().environment(settingsModel).modelContainer(modelContainer))
+            settingsWindow = window
+            // Every open starts with nothing focused.
+            window.dropFocus()
+            return window
+        }
     }
 
     /// Resizable, with the size and place remembered; the page title stands in for the window title.
@@ -43,21 +50,26 @@ final class WindowManager: NSObject, NSWindowDelegate {
         window.contentMinSize = Self.settingsMinSize
         window.setContentSize(Self.settingsSize)
         window.center()
-        window.setFrameAutosaveName("BunnySettings")
+        // The closed window gave the name up (`windowWillClose`).
+        window.setFrameUsingName(Self.settingsFrameName)
+        window.setFrameAutosaveName(Self.settingsFrameName)
         return window
     }
 
     func showOnboarding() {
-        let window = onboardingWindow ?? makeWindow(
-            title: "Welcome to Bunny",
-            size: NSSize(width: 640, height: 520),
-            root: OnboardingView()
-        )
-        onboardingWindow = window
-        present(window)
+        present(self.onboardingWindow) { [self] in
+            let window = makeWindow(title: "Welcome to Bunny", size: OnboardingView.size, root: OnboardingView())
+            onboardingWindow = window
+            return window
+        }
     }
 
-    func closeOnboarding() { onboardingWindow?.close() }
+    /// Skip and "Start using Bunny" (`openMainWindow`). Closing by any means marks the welcome as
+    /// done (`windowWillClose`), so it never comes back by itself.
+    func closeOnboarding(openMainWindow: Bool) {
+        onboardingWindow?.close()
+        if openMainWindow { onFinishOnboarding?() }
+    }
 
     /// Applies the "appearance" setting ("system" / "light" / "dark") to every Bunny window
     /// (Settings, Onboarding, the task panel). The popover also follows it via `ContentView`.
@@ -81,6 +93,10 @@ final class WindowManager: NSObject, NSWindowDelegate {
         window.title = title
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
+        // A normal window of a regular app: it lives on a desktop Space and never joins another
+        // app's full-screen Space (no `.fullScreenAuxiliary`, `.canJoinAllSpaces` or
+        // `.moveToActiveSpace`), so showing it switches to a desktop Space.
+        window.collectionBehavior = [.managed, .participatesInCycle, .fullScreenNone]
         window.contentViewController = NSHostingController(rootView: root)
         window.setContentSize(size)
         window.center()
@@ -88,20 +104,35 @@ final class WindowManager: NSObject, NSWindowDelegate {
         return window
     }
 
-    private func present(_ window: NSWindow) {
+    /// Brings `open` to the front, or makes the window when there is none. A window is created and
+    /// ordered in only after Bunny is a regular, active app: made or ordered in while still an
+    /// accessory, it joins another app's full-screen Space and floats above that app. A window stays
+    /// tied to the Space it was last shown in, which is why a closed one is dropped
+    /// (`windowWillClose`) instead of shown again.
+    private func present(_ open: @autoclosure @escaping @MainActor () -> NSWindow?, make: @escaping @MainActor () -> NSWindow) {
         onWillShowWindow?()
         NSApp.setActivationPolicy(.regular)
-        // Order the window in only after Bunny is a regular, active app. Ordered in while still an
-        // accessory, it joins another app's full-screen Space and floats above that app for good.
         DispatchQueue.main.async {
-            NSApp.activate()
-            window.makeKeyAndOrderFront(nil)
+            // Not the cooperative `activate()`: opened by a shortcut from the non-activating main
+            // window, that one may be refused, and Settings then opens on another Space unseen.
+            NSApp.activate(ignoringOtherApps: true)
+            (open() ?? make()).makeKeyAndOrderFront(nil)
         }
     }
 
     func windowWillClose(_ notification: Notification) {
         guard let closing = notification.object as? NSWindow else { return }
-        let others = [settingsWindow, onboardingWindow].compactMap { $0 }.filter { $0 !== closing && $0.isVisible }
+        if closing === settingsWindow {
+            closing.saveFrame(usingName: Self.settingsFrameName)
+            closing.setFrameAutosaveName("")
+            settingsWindow = nil
+        } else if closing === onboardingWindow {
+            UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
+            onboardingWindow = nil
+        }
+        // The window is let go once its close has finished.
+        DispatchQueue.main.async { _ = closing }
+        let others = [settingsWindow, onboardingWindow].compactMap { $0 }.filter { $0.isVisible }
         if others.isEmpty {
             NSApp.setActivationPolicy(.accessory)
         }

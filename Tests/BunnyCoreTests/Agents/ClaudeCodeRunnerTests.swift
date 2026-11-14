@@ -162,6 +162,7 @@ struct ClaudeCodeRunnerTests {
         #expect(second.hasPrefix("done: Second |"))
         // system/init is re-emitted per turn by the real CLI; sessionStarted fires once per new id.
         #expect(recorder.events.sessionIDs == ["sess-1"])
+        #expect(recorder.events.filter { $0 == .modelReported("claude-fake-1") }.count == 1)
 
         runner.interrupt()
         #expect(await recorder.waitForTurnFinished(count: 3))

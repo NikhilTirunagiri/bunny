@@ -94,6 +94,7 @@ final class MainWindowController {
     /// focus in the New note field.
     func openWindow() {
         guard !panel.isVisible else { return }
+        coordinator.windowShown = true
         coordinator.windowDidOpen()
         place()
         updateNoteSide()
@@ -111,8 +112,10 @@ final class MainWindowController {
         // Ends in-progress edits so titles commit (and empty new subtasks are dropped).
         panel.makeFirstResponder(nil)
         panel.orderOut(nil)
+        coordinator.windowShown = false
         coordinator.setTimerPickerShown(false)
         coordinator.deleteConfirmation = nil
+        coordinator.handOffCardTaskID = nil
         if !PanelCoordinator.isPinned { coordinator.closeNoteSide() }
     }
 
@@ -284,13 +287,17 @@ final class MainWindowController {
         return true
     }
 
-    /// Esc cancels the delete confirmation first, then a row rename, then ends a text edit (except in
+    /// Esc cancels the delete confirmation first, then closes the Hand off options card, then a row rename, then ends a text edit (except in
     /// the New note and search fields), then leaves search, then clears a multi-selection, then closes
     /// the note side (unless pinned), then closes the window. In the Trash view it clears the
     /// selection, then goes back to the notes list. IME composition keeps its Esc.
     private func handleEscape() -> Bool {
         if coordinator.deleteConfirmation != nil {
             coordinator.deleteConfirmation = nil
+            return true
+        }
+        if coordinator.handOffCardTaskID != nil, (panel.firstResponder as? NSTextView)?.hasMarkedText() != true {
+            coordinator.handOffCardTaskID = nil
             return true
         }
         let textView = panel.firstResponder as? NSTextView

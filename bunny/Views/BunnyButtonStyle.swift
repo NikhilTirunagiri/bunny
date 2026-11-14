@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The one button style of the main window (spec §11.16): a soft wash on hover, a stronger one while
-/// pressed, a slight scale, dimmed when disabled. No motion under Reduce Motion. No glass.
+/// pressed, a slight press-in, dimmed when disabled. Only `lively` buttons (Hand off) also grow on
+/// hover. No motion under Reduce Motion. No glass.
 struct BunnyButtonStyle: ButtonStyle {
     enum Kind {
         /// A round icon button of the given diameter; the label brings its own symbol and color.
@@ -19,10 +20,19 @@ struct BunnyButtonStyle: ButtonStyle {
     var prominent = false
     /// Icon buttons only: the button's view is the one showing, so it rests on an accent wash.
     var selected = false
+    /// Grows slightly on hover. Only the Hand off buttons; every other button stays calm.
+    var lively = false
+
+    /// The same style, growing slightly on hover (the Hand off buttons).
+    func lively(_ on: Bool = true) -> BunnyButtonStyle {
+        var style = self
+        style.lively = on
+        return style
+    }
 
     func makeBody(configuration: Configuration) -> some View {
         Content(kind: kind, destructive: destructive, prominent: prominent, selected: selected,
-                configuration: configuration)
+                lively: lively, configuration: configuration)
     }
 
     private struct Content: View {
@@ -30,6 +40,7 @@ struct BunnyButtonStyle: ButtonStyle {
         let destructive: Bool
         let prominent: Bool
         let selected: Bool
+        let lively: Bool
         let configuration: Configuration
 
         @Environment(\.isEnabled) private var isEnabled
@@ -47,7 +58,7 @@ struct BunnyButtonStyle: ButtonStyle {
             if case .row = kind { return 1 }
             guard isEnabled, !reduceMotion else { return 1 }
             if configuration.isPressed { return 0.95 }
-            return isHovered ? 1.04 : 1
+            return lively && isHovered ? 1.04 : 1
         }
 
         var body: some View {

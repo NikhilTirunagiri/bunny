@@ -13,6 +13,8 @@ struct DataSettingsPage: View {
             SettingsRow(.storage, caption: sizes ?? "Measuring…") {
                 Button("Show in Finder") { DataActions.showInFinder() }
                     .buttonStyle(.bunny)
+            } detail: {
+                SettingsNote("Bunny's own files, for backups. To read your notes as files, use Export.")
             }
             SettingsRow(.export, caption: exportCaption) {
                 Button("Export…") { exporter.chooseDestinationAndExport(from: modelContext) }
@@ -30,6 +32,10 @@ struct DataSettingsPage: View {
             }
         }
         SettingsCard {
+            SettingsRow(.resetSettings, caption: "Returns every setting to its default. Your notes are kept.") {
+                Button("Reset…") { DataActions.confirmResetSettings() }
+                    .buttonStyle(.bunny)
+            }
             SettingsRow(.eraseAll, caption: "Deletes every note and stored attachment. Settings are kept.") {
                 Button("Erase…") {
                     if DataActions.confirmEraseAll(in: modelContext) { measure() }

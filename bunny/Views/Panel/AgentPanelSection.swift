@@ -1,275 +1,503 @@
 import SwiftUI
+import SwiftData
 
-/// Agent status, questions/approvals and actions for a task (spec §8). Mounted by
-/// `TaskPanelView.agentSection` once the note was handed off (starting a run is the note side
-/// footer's Hand off). Sits in a rounded `.quaternary` fill; buttons use the shared `BunnyButtonStyle`.
-struct AgentPanelSection: View {
-    let task: BunnyTask
-    /// Reports whether an answer text field has focus, so the panel holds its editing lock while typing.
-    var onAnswerFieldFocusChange: (Bool) -> Void = { _ in }
-    @Environment(TimerManager.self) private var timerManager
+/// What the note side remembers about each note's agent part, outside the views: they are redrawn
+/// every second and on every agent event, and folded away and back, and none of that may lose a
+/// draft or an unfolded block. In memory only.
+@MainActor
+@Observable
+final class AgentPanelState {
+    static let shared = AgentPanelState()
 
-    /// What the next run uses (`RunSettingsResolver`); `harness` is also the current session's harness.
-    private var runSettings: RunSettings { AgentSettings.runSettings(for: task) }
-    private var harness: AgentHarness { runSettings.harness }
+    /// A question's answer in progress; it belongs to the question it was started for.
+    struct AnswerDraft {
+        var question: Data?
+        /// item.key -> chosen option labels.
+        var selections: [String: [String]] = [:]
+        /// item.key -> typed text ("Other…" field, or the whole answer for a freeform item).
+        var texts: [String: String] = [:]
+    }
 
-    private var stateStyle: AnyShapeStyle {
-        switch task.runState {
-        case .running: return AnyShapeStyle(Color.accentColor)
+    /// Which part is open (true: the agent), from when the note side last showed the note.
+    var agentOpen: [UUID: Bool] = [:]
+    /// Notes whose earlier messages are shown.
+    var threadExpanded: Set<UUID> = []
+    /// Notes whose long agent messages are shown whole.
+    var messagesExpanded: Set<UUID> = []
+    /// Failed notes whose raw error is shown.
+    var detailsOpen: Set<UUID> = []
+    /// The message being typed, per note.
+    var drafts: [UUID: String] = [:]
+    var answers: [UUID: AnswerDraft] = [:]
+
+    func toggle(_ id: UUID, in set: ReferenceWritableKeyPath<AgentPanelState, Set<UUID>>) {
+        if self[keyPath: set].contains(id) { self[keyPath: set].remove(id) } else { self[keyPath: set].insert(id) }
+    }
+
+    func answer(for task: BunnyTask) -> AnswerDraft {
+        if let draft = answers[task.id], draft.question == task.agentQuestionData { return draft }
+        return AnswerDraft(question: task.agentQuestionData)
+    }
+}
+
+extension BunnyTask {
+    /// The note shows an agent part: it was handed off at some point. Never a subtask.
+    var hasAgentPart: Bool { !isSubtask && (runState != .idle || agentSessionID != nil) }
+
+    /// When the agent last said something: its last message in the thread, or the end of a run that
+    /// left a summary or an error.
+    var lastAgentMessageAt: Date? {
+        let finished = agentSummary.isEmpty ? nil : agentFinishedAt
+        return [AgentThread.lastAgentDate(AgentThread.entries(from: agentThreadData)), finished].compactMap { $0 }.max()
+    }
+}
+
+// MARK: - Status line
+
+/// The state's dot: accent while working (a slow pulse, none under Reduce Motion), yellow for a
+/// question, red failed, green finished, accent (still) for a reply, neutral otherwise.
+struct AgentDot: View {
+    let state: AgentRunState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dimmed = false
+
+    private var pulses: Bool { state == .running && !reduceMotion }
+
+    private var style: AnyShapeStyle {
+        switch state {
+        case .running, .replied: return AnyShapeStyle(Color.accentColor)
         case .needsInput: return AnyShapeStyle(Color.agentNeedsInput)
         case .finished: return AnyShapeStyle(Color.green)
         case .failed: return AnyShapeStyle(Color.red)
-        default: return AnyShapeStyle(BunnyTheme.secondary)
-        }
-    }
-
-    private var showsSummary: Bool {
-        switch task.runState {
-        case .finished, .failed, .stopped, .handedOff: return !task.agentSummary.isEmpty
-        default: return false
+        default: return AnyShapeStyle(BunnyTheme.tertiary)
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            header
-            if !task.agentActivity.isEmpty {
-                Text(task.agentActivity)
-                    .font(.system(size: 11))
-                    .foregroundStyle(BunnyTheme.secondary)
-                    .lineLimit(2)
-            }
-            if task.runState == .needsInput, let question = task.pendingQuestion {
-                QuestionForm(task: task, question: question, onFocusChange: onAnswerFieldFocusChange)
-                    .id(task.agentQuestionData)
-            }
-            if showsSummary {
-                summaryView
-            }
-            actionsRow
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(BunnyTheme.surface(dark: .quaternary.opacity(0.5))))
+        Circle()
+            .fill(style)
+            .frame(width: 7, height: 7)
+            .opacity(pulses && dimmed ? 0.35 : 1)
+            .animation(pulses ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : nil, value: dimmed)
+            .onChange(of: pulses, initial: true) { _, pulses in dimmed = pulses }
     }
+}
 
-    // MARK: - Header
+/// Dot, "<Agent> <state phrase>", and the time at the right: counting while a run is active, the
+/// run's length once it ended. The whole status of the agent part, and all of it when folded.
+struct AgentStatusLine: View {
+    let task: BunnyTask
 
-    private var header: some View {
-        HStack(spacing: 6) {
-            AgentLogo(harness: harness, size: 13)
-            Text(harness.displayName)
-                .font(.system(size: 12, weight: .semibold))
-            Text(task.runState.label)
-                .font(.system(size: 11))
-                .foregroundStyle(stateStyle)
+    var body: some View {
+        HStack(spacing: 7) {
+            AgentDot(state: task.runState)
+            Text(AgentPanelRules.statusPhrase(agent: AgentSettings.runSettings(for: task).harness.displayName,
+                                              state: task.runState, opened: task.agentActivity))
+                .font(.system(size: 12.5, weight: .medium))
+                .lineLimit(1)
             Spacer(minLength: 4)
-            if task.runState.isActive, let startedAt = task.agentStartedAt {
-                Text(elapsed(since: startedAt))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(BunnyTheme.secondary)
-            }
-        }
-    }
-
-    private func elapsed(since date: Date) -> String {
-        let now = timerManager.tick
-        let seconds = max(0, Int(now.timeIntervalSince(date)))
-        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
-    }
-
-    // MARK: - Summary
-
-    private var summaryView: some View {
-        ScrollView {
-            Text(task.agentSummary)
-                .font(.system(size: 12))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxHeight: 160)
-    }
-
-    // MARK: - Actions
-
-    private var actionsRow: some View {
-        HStack(spacing: 8) {
-            Button {
-                AgentSupervisor.shared.openSession(task)
-            } label: {
-                Label("Chat about this", systemImage: "bubble.left.and.text.bubble.right")
-            }
-            .buttonStyle(.bunny)
-            .disabled(task.agentSessionID == nil)
-            .help(task.agentSessionID == nil ? "" : AgentButton.sessionToolsNote)
-
-            if task.runState.isActive {
-                Button {
-                    AgentSupervisor.shared.stop(task)
-                } label: {
-                    Text("Stop")
+            if let startedAt = task.agentStartedAt {
+                if task.runState.isActive {
+                    RunningTime(since: startedAt)
+                } else if let finishedAt = task.agentFinishedAt, task.runState != .handedOff {
+                    time(AgentPanelRules.elapsed(finishedAt.timeIntervalSince(startedAt)))
                 }
-                .buttonStyle(.bunnyDestructive)
             }
+        }
+    }
 
+    private func time(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(BunnyTheme.secondary)
+    }
+
+    /// Its own view, so the 1 s tick redraws only the time.
+    private struct RunningTime: View {
+        let since: Date
+        @Environment(TimerManager.self) private var timerManager
+
+        var body: some View {
+            Text(AgentPanelRules.elapsed(timerManager.tick.timeIntervalSince(since)))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(BunnyTheme.secondary)
+        }
+    }
+}
+
+// MARK: - The agent part
+
+/// The agent part of the note side, open (v3 spec §7 "State in the note side"): the status line, the
+/// thread, then what fits the state. Mounted by `TaskPanelView` in its one scroll area; nothing in
+/// here scrolls by itself. The message field is `AgentMessageField`, pinned under the scroll area.
+struct AgentPanelSection: View {
+    let task: BunnyTask
+    private let state = AgentPanelState.shared
+    private let enablement = AgentEnablement.shared
+
+    /// What the next run uses (`RunSettingsResolver`); `harness` is also the current session's harness.
+    private var runSettings: RunSettings { AgentSettings.runSettings(for: task) }
+    private var agent: String { runSettings.harness.displayName }
+
+    var body: some View {
+        let entries = AgentThread.entries(from: task.agentThreadData)
+        VStack(alignment: .leading, spacing: 10) {
+            AgentStatusLine(task: task)
+            if !entries.isEmpty {
+                AgentThreadView(taskID: task.id, entries: entries)
+            }
+            switch task.runState {
+            case .running:
+                activity
+                runLine
+                buttons { openSession(); stop }
+            case .needsInput:
+                if let question = task.pendingQuestion {
+                    QuestionForm(task: task, question: question)
+                }
+                activity
+            case .failed:
+                failure
+            default:
+                // "Interrupted — Bunny quit", "Time ran out": why it stopped.
+                if task.runState == .stopped, task.agentActivity != "Stopped" { activity }
+                // Why the session opened in Terminal instead, or that only the resume command was copied.
+                if task.runState == .handedOff, let note = AgentPanelRules.openedNote(activity: task.agentActivity) {
+                    Text(note)
+                        .font(.system(size: 12))
+                        .foregroundStyle(BunnyTheme.secondary)
+                        .lineLimit(3)
+                        .textSelection(.enabled)
+                }
+                // A summary from before notes kept a thread.
+                if !task.agentSummary.isEmpty, !entries.contains(where: { $0.role == .agent }) {
+                    AgentMessageText(taskID: task.id, text: task.agentSummary)
+                }
+                buttons {
+                    // The agent only replied: whether the note is done is the user's call.
+                    if task.runState == .replied, !task.isCompleted {
+                        Button("Mark done") { TaskActions.setCompleted(task, true) }
+                            .buttonStyle(.bunny)
+                    }
+                    openSession()
+                    clear
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var activity: some View {
+        if !task.agentActivity.isEmpty {
+            Text(task.agentActivity)
+                .font(.system(size: 12))
+                .foregroundStyle(BunnyTheme.secondary)
+                .lineLimit(2)
+        }
+    }
+
+    /// "model · effort · folder", quiet.
+    @ViewBuilder
+    private var runLine: some View {
+        if let folder = task.agentWorkingDirectory {
+            Text("\(AgentSettings.modelName(runSettings)) · \(AgentSettings.effortName(runSettings)) · \(AgentSettings.folderLabel(folder))")
+                .font(.system(size: 11))
+                .foregroundStyle(BunnyTheme.tertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(folder)
+        }
+    }
+
+    // MARK: Failed
+
+    @ViewBuilder
+    private var failure: some View {
+        let raw = task.agentSummary
+        let open = state.detailsOpen.contains(task.id)
+        Text(AgentPanelRules.failureSentence(raw: raw, agent: agent))
+            .font(.system(size: 13))
+            .fixedSize(horizontal: false, vertical: true)
+        if !raw.isEmpty {
+            Button { state.toggle(task.id, in: \.detailsOpen) } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                    Text("Details")
+                }
+                .font(.system(size: 11.5))
+                .foregroundStyle(BunnyTheme.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if open {
+                Text(raw)
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(BunnyTheme.surface(dark: .quaternary.opacity(0.5)), in: .rect(cornerRadius: 8, style: .continuous))
+            }
+        }
+        buttons {
+            if enablement.anyEnabled {
+                // A fresh run with the note's settings, like the footer's "Hand off again".
+                Button("Try again") { AgentSupervisor.shared.start(task, harness: nil) }
+                    .buttonStyle(.bunny)
+            }
+            if !raw.isEmpty {
+                Button("Copy details") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(raw, forType: .string)
+                }
+                .buttonStyle(.bunny)
+            }
+            // Room for three: the session when there is one to open, else Clear.
+            if task.agentSessionID != nil { openSession(compact: true) } else { clear }
+        }
+    }
+
+    // MARK: Buttons
+
+    private func buttons(@ViewBuilder _ content: () -> some View) -> some View {
+        HStack(spacing: 6) {
+            content()
             Spacer(minLength: 0)
         }
     }
-}
 
-/// Configuration menu shared by the note side footer's Hand off arrow and the row `AgentButton` (right-click)
-/// (owner change request, spec §2/§3): choose the agent for this task's next run, its model and effort,
-/// or reset all three to Settings' defaults. Callers show it only while `isAvailable(for:)`: the task has
-/// no session and no active run, so the choice can only affect a new run. The agent is stored in the
-/// existing `agentHarness` (the same field a run sets at launch), and choosing a model or effort also
-/// stores the menu's agent, so overrides are always bound to the harness they were chosen for
-/// (`RunSettingsResolver` ignores them for any other harness).
-struct AgentConfigMenu: View {
-    let task: BunnyTask
-    private let codexModels = CodexModelStore.shared
-
-    /// The menu changes only what a new run uses, so it is offered only when a left click would start one.
-    static func isAvailable(for task: BunnyTask) -> Bool {
-        task.agentSessionID == nil && !task.runState.isActive
+    /// "Open in <app>": the app chosen for this note's agent in Settings. `compact`: beside two other
+    /// buttons there is no room for the name, which the tooltip gives instead.
+    private func openSession(compact: Bool = false) -> some View {
+        let target = "Open in \(AgentSettings.openInName(for: runSettings.harness))"
+        return Button(compact ? "Open session" : target) { AgentSupervisor.shared.openSession(task) }
+            .buttonStyle(.bunny)
+            .lineLimit(1)
+            .disabled(task.agentSessionID == nil)
+            .help(task.agentSessionID == nil ? "" : "\(target). \(AgentButton.sessionToolsNote)")
     }
 
-    private var settings: RunSettings { AgentSettings.runSettings(for: task) }
-    private var harness: AgentHarness { settings.harness }
-    /// The task's own overrides, when they apply to `harness` (nil = Settings' default).
-    private var modelOverride: String? { task.harness == harness ? AgentRunnerText.nonEmpty(task.agentModel) : nil }
-    private var effortOverride: String? { task.harness == harness ? AgentRunnerText.nonEmpty(task.agentEffort) : nil }
+    private var stop: some View {
+        Button("Stop") { AgentSupervisor.shared.stop(task) }
+            .buttonStyle(.bunny)
+    }
+
+    private var clear: some View {
+        Button("Clear") { AgentSupervisor.shared.clear(task) }
+            .buttonStyle(.bunny)
+            .help("Forget this agent session")
+    }
+}
+
+// MARK: - Thread
+
+/// The conversation: the user's messages at the right in a tinted bubble, the agent's at the left as
+/// plain text. The last exchange shows; what came before is behind "Show N earlier messages".
+private struct AgentThreadView: View {
+    let taskID: UUID
+    let entries: [AgentThread.Entry]
+    private let state = AgentPanelState.shared
 
     var body: some View {
-        Group {
-            Menu("Agent") {
-                agentChoice(.claudeCode)
-                agentChoice(.codex)
-            }
-            Menu("Model") { modelItems }
-            Menu("Effort") { effortItems }
-            Button("Use Defaults") {
-                task.agentHarness = nil
-                task.agentHarnessChosen = false
-                task.agentModel = nil
-                task.agentEffort = nil
-            }
-            .disabled(!task.agentHarnessChosen && task.agentHarness == nil && task.agentModel == nil && task.agentEffort == nil)
-        }
-        .onAppear { codexModels.loadIfNeeded() }
-    }
-
-    private func agentChoice(_ candidate: AgentHarness) -> some View {
-        pickerButton(title: candidate.displayName, isSelected: harness == candidate) {
-            task.agentHarness = candidate.rawValue
-            task.agentHarnessChosen = true
-            // Model/effort overrides are harness-specific; switching agents must not carry them over.
-            task.agentModel = nil
-            task.agentEffort = nil
-            if candidate == .codex { codexModels.loadIfNeeded() }
-        }
-    }
-
-    /// Binds a model/effort choice to the menu's harness (Minor 8).
-    private func choose(model: String?? = .none, effort: String?? = .none) {
-        task.agentHarness = harness.rawValue
-        task.agentHarnessChosen = true
-        if case let .some(model) = model { task.agentModel = model }
-        if case let .some(effort) = effort { task.agentEffort = effort }
-    }
-
-    private func defaultTitle(_ settingsValue: String) -> String {
-        settingsValue.isEmpty ? "Default" : "Default (\(settingsValue))"
-    }
-
-    @ViewBuilder
-    private var modelItems: some View {
-        let current = modelOverride
-        pickerButton(title: defaultTitle(AgentSettings.model(for: harness)), isSelected: current == nil) {
-            choose(model: .some(nil))
-        }
-        switch harness {
-        case .claudeCode:
-            ForEach(AgentModelOptions.claudeModelAliases, id: \.self) { alias in
-                pickerButton(title: alias, isSelected: current == alias) {
-                    choose(model: alias)
+        let earlier = AgentThread.earlierCount(entries)
+        let expanded = state.threadExpanded.contains(taskID)
+        VStack(alignment: .leading, spacing: 8) {
+            if earlier > 0 {
+                Button(expanded ? "Hide earlier messages" : "Show \(earlier) earlier message\(earlier == 1 ? "" : "s")") {
+                    state.toggle(taskID, in: \.threadExpanded)
                 }
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundStyle(BunnyTheme.secondary)
             }
-            if let current, !AgentModelOptions.claudeModelAliases.contains(current) {
-                pickerButton(title: current, isSelected: true) {}
-            }
-        case .codex:
-            if codexModels.models.isEmpty {
-                Button(codexModels.isLoading ? "Loading models…" : "Model list unavailable") {}
-                    .disabled(true)
-            }
-            ForEach(codexModels.models, id: \.id) { model in
-                pickerButton(title: model.displayName, isSelected: current == model.id) {
-                    choose(model: model.id)
+            ForEach(entries.indices.filter { expanded || $0 >= earlier }, id: \.self) { index in
+                let entry = entries[index]
+                if entry.role == .user {
+                    Text(entry.text)
+                        .font(.system(size: 12.5))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(BunnyTheme.selection(dark: 0.28), in: .rect(cornerRadius: 11, style: .continuous))
+                        .padding(.leading, 36)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                } else {
+                    AgentMessageText(taskID: taskID, text: entry.text)
                 }
-            }
-            if let current, !codexModels.models.contains(where: { $0.id == current }) {
-                pickerButton(title: current, isSelected: true) {}
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var effortItems: some View {
-        let current = effortOverride
-        let options = AgentModelOptions.efforts(for: harness, modelID: settings.model, codexModels: codexModels.models)
-        pickerButton(title: defaultTitle(AgentSettings.effort(for: harness)), isSelected: current == nil) {
-            choose(effort: .some(nil))
-        }
-        ForEach(options, id: \.self) { effort in
-            pickerButton(title: effort, isSelected: current == effort) {
-                choose(effort: effort)
-            }
-        }
-    }
-
-    private func pickerButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            if isSelected {
-                Label(title, systemImage: "checkmark")
-            } else {
-                Text(title)
             }
         }
     }
 }
 
-/// The `needsInput` question/approval form: per-item options or freeform text, plus Send;
-/// or, for approvals, the title/detail with Allow/Deny. A new `AgentQuestion` gets a fresh
-/// instance (the caller applies `.id(task.agentQuestionData)`), so state never leaks between questions.
+/// One agent message: selectable, links clickable, folded to six lines behind "Show more" when long.
+private struct AgentMessageText: View {
+    let taskID: UUID
+    let text: String
+    private let state = AgentPanelState.shared
+
+    private var attributed: AttributedString {
+        var result = AttributedString(text)
+        for link in NoteText.links(in: text) {
+            guard let range = Range(link.range, in: text),
+                  let lower = AttributedString.Index(range.lowerBound, within: result),
+                  let upper = AttributedString.Index(range.upperBound, within: result) else { continue }
+            result[lower..<upper].link = link.url
+            result[lower..<upper].foregroundColor = Color(nsColor: BunnyTheme.link)
+        }
+        return result
+    }
+
+    var body: some View {
+        let long = AgentThread.isLong(text)
+        let expanded = state.messagesExpanded.contains(taskID)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(attributed)
+                .font(.system(size: 12.5))
+                .textSelection(.enabled)
+                .lineLimit(long && !expanded ? AgentThread.foldedLines : nil)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if long {
+                Button(expanded ? "Show less" : "Show more") { state.toggle(taskID, in: \.messagesExpanded) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(BunnyTheme.secondary)
+            }
+        }
+    }
+}
+
+// MARK: - Message field
+
+/// "Message <Agent>…": Return sends, Shift-Return starts a new line. Shown whenever the note's session
+/// can take a message (`AgentMessageRule`) and its agent is switched on. The draft lives in
+/// `AgentPanelState`, so redraws and folding keep it.
+struct AgentMessageField: View {
+    let task: BunnyTask
+    private let state = AgentPanelState.shared
+
+    static func isAvailable(for task: BunnyTask) -> Bool {
+        task.agentSessionID != nil
+            && AgentMessageRule.delivery(state: task.runState, hasSession: true) != .unavailable
+            && AgentEnablement.shared.isEnabled(AgentSettings.runSettings(for: task).harness)
+    }
+
+    private var draft: Binding<String> {
+        Binding(get: { state.drafts[task.id] ?? "" }, set: { state.drafts[task.id] = $0 })
+    }
+
+    /// The caret (or selected text), so Shift-Return breaks the line there.
+    @State private var selection: TextSelection?
+
+    private var isEmpty: Bool { draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            TextField("Message \(AgentSettings.runSettings(for: task).harness.displayName)…", text: draft, selection: $selection, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .lineLimit(1...5)
+                .onSubmit(send)
+                .onKeyPress(keys: [.return], phases: .down) { press in
+                    guard press.modifiers.contains(.shift) else { return .ignored }
+                    insertNewline()
+                    return .handled
+                }
+                .padding(.vertical, 4)
+            Button(action: send) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(Color.accentColor, in: .circle)
+                    .opacity(isEmpty ? 0.35 : 1)
+            }
+            .buttonStyle(.plain)
+            .disabled(isEmpty)
+            .help("Send (Return)")
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 5)
+        .padding(.vertical, 4)
+        .background(BunnyTheme.surface(dark: .quaternary.opacity(0.6)), in: .rect(cornerRadius: 13, style: .continuous))
+    }
+
+    /// A line break in place of the selection, the caret after it; at the end when the caret is unknown.
+    private func insertNewline() {
+        var text = draft.wrappedValue
+        guard case let .selection(range)? = selection?.indices, range.upperBound <= text.endIndex else {
+            draft.wrappedValue = text + "\n"
+            return
+        }
+        let caret = text.distance(from: text.startIndex, to: range.lowerBound) + 1
+        text.replaceSubrange(range, with: "\n")
+        draft.wrappedValue = text
+        selection = TextSelection(insertionPoint: text.index(text.startIndex, offsetBy: caret))
+    }
+
+    private func send() {
+        guard !isEmpty else { return }
+        AgentSupervisor.shared.sendMessage(task, draft.wrappedValue)
+        state.drafts[task.id] = nil
+    }
+}
+
+// MARK: - Question
+
+/// The `needsInput` form: the question with its options as rows (radio, or checkboxes when several
+/// may be picked, and "Other…"), or a growing field for a free-text question, and Send; for an
+/// approval, the tool or command with Deny and Allow. One primary button. The answer in progress
+/// lives in `AgentPanelState`, tied to its question.
 private struct QuestionForm: View {
     let task: BunnyTask
     let question: AgentQuestion
-    let onFocusChange: (Bool) -> Void
+    private let state = AgentPanelState.shared
 
-    /// item.key of the focused "Other…"/freeform field.
-    @FocusState private var focusedKey: String?
-
-    /// item.key -> chosen option labels.
-    @State private var selections: [String: [String]] = [:]
-    /// item.key -> typed text ("Other…" field, or the whole answer for a freeform item).
-    @State private var texts: [String: String] = [:]
+    private var draft: AgentPanelState.AnswerDraft { state.answer(for: task) }
+    private var fieldFill: some ShapeStyle { BunnyTheme.surface(dark: .quaternary.opacity(0.5)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if question.kind == .approval {
-                approvalView
+                approval
             } else {
                 ForEach(question.items, id: \.key) { item in
                     itemView(item)
                 }
-                sendRow
+            }
+            HStack(spacing: 6) {
+                Button("Stop") { AgentSupervisor.shared.stop(task) }
+                    .buttonStyle(.bunny)
+                Spacer(minLength: 0)
+                if question.kind == .approval {
+                    Button("Deny") { answer(AgentAnswer(selections: [:], approved: false)) }
+                        .buttonStyle(.bunny)
+                    Button("Allow") { answer(AgentAnswer(selections: [:], approved: true)) }
+                        .buttonStyle(.bunnyProminent)
+                } else {
+                    Button("Send", action: send)
+                        .buttonStyle(.bunnyProminent)
+                        .disabled(!canSend)
+                }
             }
         }
-        .onChange(of: focusedKey) { _, key in onFocusChange(key != nil) }
-        // Answering (or a new question) tears the form down without a focus change.
-        .onDisappear { onFocusChange(false) }
     }
 
-    // MARK: - Choices / freeform
+    private func answer(_ answer: AgentAnswer) {
+        AgentSupervisor.shared.answer(task, with: answer)
+        state.answers[task.id] = nil
+    }
+
+    private func send() {
+        guard canSend else { return }
+        answer(AgentAnswer(selections: finalSelections(), approved: nil))
+    }
+
+    // MARK: Choices / freeform
 
     private func itemView(_ item: AgentQuestionItem) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -280,17 +508,17 @@ private struct QuestionForm: View {
             }
             Text(item.question)
                 .font(.system(size: 13))
+                .fixedSize(horizontal: false, vertical: true)
 
             if item.options.isEmpty {
-                TextField("", text: textBinding(item.key), axis: .vertical)
+                TextField("Your answer", text: textBinding(item.key), axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12.5))
-                    .lineLimit(3...6)
-                    .focused($focusedKey, equals: item.key)
-                    .padding(6)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(BunnyTheme.deepSurface(dark: .quaternary.opacity(0.4))))
+                    .lineLimit(2...8)
+                    .padding(7)
+                    .background(fieldFill, in: .rect(cornerRadius: 8, style: .continuous))
             } else {
-                VStack(spacing: 4) {
+                VStack(spacing: 2) {
                     ForEach(item.options, id: \.label) { option in
                         optionRow(item, option)
                     }
@@ -298,52 +526,41 @@ private struct QuestionForm: View {
                 if item.allowsOther {
                     TextField("Other…", text: textBinding(item.key))
                         .textFieldStyle(.plain)
-                        .focused($focusedKey, equals: item.key)
                         .font(.system(size: 12.5))
-                        .padding(6)
-                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(BunnyTheme.deepSurface(dark: .quaternary.opacity(0.4))))
+                        .onSubmit(send)
+                        .padding(7)
+                        .background(fieldFill, in: .rect(cornerRadius: 8, style: .continuous))
                 }
             }
         }
     }
 
     private func optionRow(_ item: AgentQuestionItem, _ option: AgentQuestionOption) -> some View {
-        let isSelected = (selections[item.key] ?? []).contains(option.label)
+        let isSelected = (draft.selections[item.key] ?? []).contains(option.label)
         return Button {
             toggle(item, option)
         } label: {
-            HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: isSelected
-                      ? (item.multiSelect ? "checkmark.square.fill" : "circle.fill")
+                      ? (item.multiSelect ? "checkmark.square.fill" : "largecircle.fill.circle")
                       : (item.multiSelect ? "square" : "circle"))
-                    .font(.system(size: 12))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(BunnyTheme.secondary))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(option.label).font(.system(size: 12.5))
                     if let detail = option.detail, !detail.isEmpty {
-                        Text(detail).font(.system(size: 10.5)).foregroundStyle(BunnyTheme.secondary)
+                        Text(detail).font(.system(size: 11)).foregroundStyle(BunnyTheme.secondary)
                     }
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 7)
             .padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(isSelected ? AnyShapeStyle(Color.accentColor.opacity(0.12)) : AnyShapeStyle(.clear)))
+            .background(isSelected ? AnyShapeStyle(BunnyTheme.selection(dark: 0.2)) : AnyShapeStyle(.clear),
+                        in: .rect(cornerRadius: 7, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    private var sendRow: some View {
-        HStack {
-            Spacer()
-            Button("Send") {
-                AgentSupervisor.shared.answer(task, with: AgentAnswer(selections: finalSelections(), approved: nil))
-            }
-            .buttonStyle(.bunnyProminent)
-            .disabled(!canSend)
-        }
     }
 
     private var canSend: Bool {
@@ -352,10 +569,11 @@ private struct QuestionForm: View {
     }
 
     private func finalSelections() -> [String: [String]] {
+        let draft = draft
         var result: [String: [String]] = [:]
         for item in question.items {
-            var values = selections[item.key] ?? []
-            let text = (texts[item.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            var values = draft.selections[item.key] ?? []
+            let text = (draft.texts[item.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty { values.append(text) }
             result[item.key] = values
         }
@@ -363,7 +581,8 @@ private struct QuestionForm: View {
     }
 
     private func toggle(_ item: AgentQuestionItem, _ option: AgentQuestionOption) {
-        var current = selections[item.key] ?? []
+        var draft = draft
+        var current = draft.selections[item.key] ?? []
         if let index = current.firstIndex(of: option.label) {
             current.remove(at: index)
         } else if item.multiSelect {
@@ -371,39 +590,37 @@ private struct QuestionForm: View {
         } else {
             current = [option.label]
         }
-        selections[item.key] = current
+        draft.selections[item.key] = current
+        state.answers[task.id] = draft
     }
 
     private func textBinding(_ key: String) -> Binding<String> {
-        Binding(get: { texts[key] ?? "" }, set: { texts[key] = $0 })
+        Binding(get: { draft.texts[key] ?? "" }, set: { new in
+            var draft = draft
+            draft.texts[key] = new
+            state.answers[task.id] = draft
+        })
     }
 
-    // MARK: - Approval
+    // MARK: Approval
 
-    private var approvalView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
+    private var approval: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Allow this?")
+                .font(.system(size: 13))
+            VStack(alignment: .leading, spacing: 3) {
                 if let title = question.approvalTitle, !title.isEmpty {
                     Text(title).font(.system(size: 11, weight: .semibold, design: .monospaced))
                 }
                 if let detail = question.approvalDetail, !detail.isEmpty {
                     Text(detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(BunnyTheme.secondary)
+                        .lineLimit(6)
                 }
             }
             .textSelection(.enabled)
-            .lineLimit(4)
-
-            HStack(spacing: 8) {
-                Button("Deny") {
-                    AgentSupervisor.shared.answer(task, with: AgentAnswer(selections: [:], approved: false))
-                }
-                .buttonStyle(.bunny)
-                Button("Allow") {
-                    AgentSupervisor.shared.answer(task, with: AgentAnswer(selections: [:], approved: true))
-                }
-                .buttonStyle(.bunnyProminent)
-                Spacer(minLength: 0)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(fieldFill, in: .rect(cornerRadius: 8, style: .continuous))
         }
     }
 }

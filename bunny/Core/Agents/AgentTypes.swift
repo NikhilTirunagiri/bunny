@@ -21,7 +21,8 @@ enum AgentHarness: String, Codable, CaseIterable, Sendable {
 
 /// Lifecycle of an agent run, persisted on the task.
 enum AgentRunState: String, Codable, Sendable {
-    case idle, running, needsInput, finished, failed, stopped, handedOff
+    /// `replied`: a turn ended without the agent declaring the task complete (`finished` is that).
+    case idle, running, needsInput, replied, finished, failed, stopped, handedOff
 
     var isActive: Bool {
         self == .running || self == .needsInput
@@ -32,6 +33,7 @@ enum AgentRunState: String, Codable, Sendable {
         case .idle: return "Idle"
         case .running: return "Working…"
         case .needsInput: return "Needs your input"
+        case .replied: return "Replied"
         case .finished: return "Done"
         case .failed: return "Failed"
         case .stopped: return "Stopped"
@@ -47,14 +49,60 @@ enum AgentAutonomy: String, Codable, CaseIterable, Sendable {
 
 /// Preferred app for "open this session" / "chat about this".
 enum OpenInApp: String, Codable, CaseIterable, Sendable {
-    case terminal, ghostty, vscode, cursor
+    case terminal, vscode
+    /// The agent's own desktop app: Claude for Claude Code sessions, Codex for Codex sessions.
+    case claudeApp, codexApp
+    /// The app the owner picked with "Other App…" (its path and name are stored beside the choice).
+    case custom
 
     var displayName: String {
         switch self {
         case .terminal: return "Terminal"
-        case .ghostty: return "Ghostty"
         case .vscode: return "VS Code"
-        case .cursor: return "Cursor"
+        case .claudeApp: return "Claude app"
+        case .codexApp: return "Codex app"
+        case .custom: return "Other App"
+        }
+    }
+
+    /// How the installed app is found (`custom` has a stored path instead).
+    var bundleIdentifier: String? {
+        switch self {
+        case .terminal: return "com.apple.Terminal"
+        case .vscode: return "com.microsoft.VSCode"
+        case .claudeApp: return "com.anthropic.claudefordesktop"
+        case .codexApp: return "com.openai.codex"
+        case .custom: return nil
+        }
+    }
+
+    /// A desktop app only opens its own agent's sessions; everything else opens both.
+    func supports(_ harness: AgentHarness) -> Bool {
+        switch self {
+        case .claudeApp: return harness == .claudeCode
+        case .codexApp: return harness == .codex
+        default: return true
+        }
+    }
+
+    /// The built-in targets of `harness`, in menu order.
+    static func builtIn(for harness: AgentHarness) -> [OpenInApp] {
+        [.terminal, .vscode, harness == .claudeCode ? .claudeApp : .codexApp]
+    }
+
+    /// What the old single "Open sessions in" value becomes for each agent. Ghostty and Cursor are no
+    /// longer built in: they become the custom app, by bundle identifier (Terminal when not installed).
+    enum Migrated: Equatable {
+        case builtIn(OpenInApp)
+        case customApp(bundleIdentifier: String)
+    }
+
+    static func migrated(from old: String?) -> Migrated {
+        switch old {
+        case "vscode": return .builtIn(.vscode)
+        case "ghostty": return .customApp(bundleIdentifier: "com.mitchellh.ghostty")
+        case "cursor": return .customApp(bundleIdentifier: "com.todesktop.230313mzl4w4u92")
+        default: return .builtIn(.terminal)
         }
     }
 }
@@ -142,6 +190,8 @@ struct AgentBrief: Equatable, Sendable {
 /// A single event streamed from a running agent, delivered on the main queue.
 enum AgentEvent: Equatable, Sendable {
     case sessionStarted(String)
+    /// The model the CLI says the session runs on (Claude Code's `system/init`).
+    case modelReported(String)
     case activity(String)
     case question(AgentQuestion)
     case turnFinished(text: String, success: Bool)

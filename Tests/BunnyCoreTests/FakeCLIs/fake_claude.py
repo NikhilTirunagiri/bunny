@@ -45,7 +45,8 @@ def main():
             content = msg.get("message", {}).get("content", [])
             text = "".join(c.get("text", "") for c in content if c.get("type") == "text")
             if not initialized:
-                out({"type": "system", "subtype": "init", "session_id": "sess-1", "cwd": "."})
+                out({"type": "system", "subtype": "init", "session_id": "sess-1", "cwd": ".",
+                     "model": "claude-fake-1"})
                 initialized = True
             if "FAIL" in text:
                 sys.stderr.write("boom\n")

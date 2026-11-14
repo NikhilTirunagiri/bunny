@@ -305,3 +305,16 @@ toggles with detection status. Closing or skipping counts as done.
   opens an external app.
 - **Tooling**: `bunny --snapshot <dir>` (Debug) renders fixed UI states to PNGs; implementers use
   it to check layout. Nothing may script the desktop or need a privacy permission.
+
+## 14. Planned for v3.1 (not in v3.0)
+
+- **Remote hand-off over SSH.** Off by default, behind a switch in Settings. When on: a Servers
+  page (add a server with name, address, user, port, key FILE path — never key contents or
+  passwords — and a default remote folder; import hosts from `~/.ssh/config`; "Test connection"
+  checks sign-in and that the agent CLI is installed there), and a "Run on" row in the Hand off
+  options card (This Mac / a server, with a remote folder field and recent remote paths). The
+  runner's pipe goes through `ssh`; key-based sign-in only. Open: what to do with attachments
+  (recommended: copy files up to ~20 MB to a temp folder on the server, skip folders). Bunny tools
+  are not available to remote runs.
+- **Background image** behind the notes (blurred once and cached, strength slider).
+- **Folder memory for new notes**; optional long-delay hover preview.

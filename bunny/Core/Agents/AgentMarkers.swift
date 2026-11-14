@@ -1,6 +1,6 @@
 import Foundation
 
-/// Extracts and strips Bunny's inline markers (`<bunny-question>`, `<bunny-subtasks-done>`) from Codex's turn text. Pure, Foundation-only.
+/// Extracts and strips Bunny's inline markers (`<bunny-question>`, `<bunny-subtasks-done>`, `<bunny-task-done/>`) from an agent's turn text. Pure, Foundation-only.
 enum AgentMarkers {
     private struct MarkerQuestionJSON: Decodable {
         let question: String
@@ -65,5 +65,12 @@ enum AgentMarkers {
         let numbers = payload.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
 
         return (strippedText, numbers)
+    }
+
+    /// `<bunny-task-done/>`: the agent declares the whole task complete. Every occurrence is stripped.
+    static func extractTaskDone(from text: String) -> (text: String, done: Bool) {
+        let stripped = text.replacingOccurrences(of: "<bunny-task-done\\s*/?>(\\s*</bunny-task-done>)?", with: "",
+                                                 options: .regularExpression)
+        return (stripped.trimmingCharacters(in: .whitespacesAndNewlines), stripped != text)
     }
 }

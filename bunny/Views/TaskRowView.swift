@@ -63,11 +63,11 @@ struct TaskRowView: View {
         return isHoveredNow
     }
 
-    /// Hand off shows on hover only, on an open top-level note with no session and no active run.
-    /// (Agents have no on/off switch yet; when they get one, it is checked here.)
+    /// Hand off shows on hover only, on an open top-level note with no session and no active run,
+    /// while an agent is switched on.
     private var showsHandOff: Bool {
         isHovered && !isEditing && !task.isSubtask && !task.isCompleted
-            && task.agentSessionID == nil && !task.runState.isActive
+            && task.agentSessionID == nil && !task.runState.isActive && AgentEnablement.shared.anyEnabled
     }
 
     var body: some View {
@@ -188,6 +188,11 @@ struct TaskRowView: View {
                     .symbolEffect(.pulse)
                     .help("Agent working")
             }
+            if task.runState == .replied && !task.isCompleted {
+                Image(systemName: "bubble.left.fill")
+                    .foregroundStyle(Color.accentColor)
+                    .help("Agent replied")
+            }
             if task.isPinned {
                 Image(systemName: "pin.fill").help("Shown in the menu bar")
             }
@@ -248,10 +253,13 @@ struct TaskRowView: View {
                 MenuEntry.item("Add Subtask") { addSubtask() }
                 // The picker is a popover on the row; open it once the menu has closed.
                 MenuEntry.item("Set Timer…") { DispatchQueue.main.async { showTimerPicker = true } }
-                if task.agentSessionID == nil && !task.runState.isActive {
-                    MenuEntry.item("Hand Off to \(AgentSettings.runSettings(for: task).harness.displayName)") {
-                        AgentSupervisor.shared.primaryAction(for: task)
+                if AgentEnablement.shared.anyEnabled && !task.runState.isActive {
+                    if task.agentSessionID == nil {
+                        MenuEntry.item("Hand Off to \(AgentSettings.runSettings(for: task).harness.displayName)") {
+                            AgentSupervisor.shared.primaryAction(for: task)
+                        }
                     }
+                    MenuEntry.item("Hand Off Options…") { coordinator.openHandOffCard(task.id) }
                 }
             }
             MenuEntry.item("Copy as Prompt") { TaskActions.copyAsPrompt([task.id], in: modelContext) }

@@ -40,12 +40,12 @@ enum SettingsCatalog {
         // Notes
         case completedRetention, trashRetention, confirmDelete
         // Agents
-        case claudeCode, codex, defaultAgent, openSessionsIn, defaultFolder, advanced
+        case claudeCode, codex, defaultAgent, openClaudeSessionsIn, openCodexSessionsIn, defaultFolder, advanced
         // Agents, under Advanced
         case claudePath, codexPath, claudeModel, claudeEffort, codexModel, codexEffort, permissions
         case toolsServer, toolsToken, toolsClaude, toolsCodex
         // Data
-        case storage, export, emptyTrash, eraseAll
+        case storage, export, emptyTrash, resetSettings, eraseAll
         // About
         case repository, checkForUpdates
     }
@@ -76,11 +76,12 @@ enum SettingsCatalog {
         Row(id: .trashRetention, page: .notes, title: "Empty Trash", icon: "trash", keywords: ["delete", "purge", "retention", "days", "automatically"]),
         Row(id: .confirmDelete, page: .notes, title: "Ask before deleting forever", icon: "questionmark.circle", keywords: ["confirm", "confirmation", "warning"]),
 
-        Row(id: .claudeCode, page: .agents, title: "Claude Code", icon: "terminal", keywords: ["claude", "cli", "installed", "found", "anthropic"]),
-        Row(id: .codex, page: .agents, title: "Codex", icon: "terminal", keywords: ["openai", "cli", "installed", "found"]),
+        Row(id: .claudeCode, page: .agents, title: "Claude Code", icon: "terminal", keywords: ["claude", "cli", "installed", "found", "anthropic", "enable", "turn on", "off", "switch"]),
+        Row(id: .codex, page: .agents, title: "Codex", icon: "terminal", keywords: ["openai", "cli", "installed", "found", "enable", "turn on", "off", "switch"]),
         Row(id: .defaultAgent, page: .agents, title: "Default agent", icon: "sparkles", keywords: ["hand off", "handoff", "claude", "codex"]),
-        Row(id: .openSessionsIn, page: .agents, title: "Open sessions in", icon: "macwindow", keywords: ["terminal", "ghostty", "vs code", "vscode", "cursor", "app"]),
-        Row(id: .defaultFolder, page: .agents, title: "Default folder", icon: "folder", keywords: ["workspace", "directory", "project", "path"]),
+        Row(id: .openClaudeSessionsIn, page: .agents, title: "Open Claude Code sessions in", icon: "macwindow", keywords: ["terminal", "iterm", "ghostty", "warp", "kitty", "wezterm", "alacritty", "vs code", "vscode", "cursor", "other app", "resume", "claude app", "desktop"]),
+        Row(id: .openCodexSessionsIn, page: .agents, title: "Open Codex sessions in", icon: "macwindow", keywords: ["terminal", "iterm", "ghostty", "warp", "kitty", "wezterm", "alacritty", "vs code", "vscode", "cursor", "other app", "resume", "codex app", "desktop", "openai"]),
+        Row(id: .defaultFolder, page: .agents, title: "Default folder", icon: "folder", keywords: ["workspace", "directory", "project", "path", "bunny folder"]),
         Row(id: .advanced, page: .agents, title: "Advanced", icon: "slider.horizontal.3", keywords: ["more", "options"]),
         Row(id: .claudePath, page: .agents, title: "Claude Code path", icon: "point.topleft.down.to.point.bottomright.curvepath", keywords: ["cli", "detect", "binary", "location"], advanced: true),
         Row(id: .codexPath, page: .agents, title: "Codex path", icon: "point.topleft.down.to.point.bottomright.curvepath", keywords: ["cli", "detect", "binary", "location"], advanced: true),
@@ -89,7 +90,7 @@ enum SettingsCatalog {
         Row(id: .codexModel, page: .agents, title: "Codex model", icon: "cpu", keywords: ["gpt", "custom"], advanced: true),
         Row(id: .codexEffort, page: .agents, title: "Codex effort", icon: "gauge.with.dots.needle.50percent", keywords: ["reasoning", "thinking", "model"], advanced: true),
         Row(id: .permissions, page: .agents, title: "Permissions", icon: "hand.raised", keywords: ["autonomy", "autonomous", "ask", "commands", "approve", "approval"], advanced: true),
-        Row(id: .toolsServer, page: .agents, title: "Bunny tools server", icon: "server.rack", keywords: ["mcp", "port", "url", "copy"], advanced: true),
+        Row(id: .toolsServer, page: .agents, title: "Bunny tools server", icon: "server.rack", keywords: ["mcp", "port", "url", "copy", "enable", "turn on", "off", "switch", "notes"], advanced: true),
         Row(id: .toolsToken, page: .agents, title: "Access token", icon: "key", keywords: ["mcp", "regenerate", "bearer", "bunny tools", "security"], advanced: true),
         Row(id: .toolsClaude, page: .agents, title: "Bunny tools in all Claude Code sessions", icon: "wrench.and.screwdriver", keywords: ["mcp", "install", "uninstall", "global"], advanced: true),
         Row(id: .toolsCodex, page: .agents, title: "Bunny tools in all Codex sessions", icon: "wrench.and.screwdriver", keywords: ["mcp", "install", "uninstall", "global"], advanced: true),
@@ -97,6 +98,7 @@ enum SettingsCatalog {
         Row(id: .storage, page: .data, title: "Stored on this Mac", icon: "internaldrive", keywords: ["size", "disk", "space", "database", "attachments", "finder", "files"]),
         Row(id: .export, page: .data, title: "Export all notes", icon: "square.and.arrow.up", keywords: ["markdown", "backup", "save", "files"]),
         Row(id: .emptyTrash, page: .data, title: "Empty Trash", icon: "trash", keywords: ["delete", "forever", "now"]),
+        Row(id: .resetSettings, page: .data, title: "Reset settings", icon: "arrow.counterclockwise", keywords: ["reset", "defaults", "restore", "settings", "preferences"]),
         Row(id: .eraseAll, page: .data, title: "Erase all data", icon: "exclamationmark.triangle", keywords: ["delete", "reset", "remove", "everything", "wipe"]),
 
         Row(id: .repository, page: .about, title: "Source code", icon: "chevron.left.forwardslash.chevron.right", keywords: ["github", "repository", "repo", "authors", "website", "link"]),

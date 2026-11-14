@@ -51,9 +51,10 @@ enum AgentPromptBuilder {
             askSentence = "Codex: end your turn with exactly one <bunny-question>{\"question\": \"...\", \"options\": [\"...\", \"...\"]}</bunny-question> block (options optional; omit for free-text answers) and nothing after it. Only include a <bunny-question> block if you cannot continue without the user's decision. Never add one after finishing the task."
         }
         var bullets = [
-            "You were handed this task from Bunny, a menu-bar task list. Work autonomously.",
+            "You were handed this task from Bunny, a menu-bar task list. Work autonomously. The user may also chat with you or ask questions before or after the work.",
             "Only ask the user when genuinely blocked or when a decision is theirs. \(askSentence)",
             "When you finish, reply with a short summary of what you did. If you completed specific subtasks, add a final line <bunny-subtasks-done>1,3</bunny-subtasks-done> with their numbers.",
+            "When, and only when, you have finished the whole task the note describes, end your final message with <bunny-task-done/> on its own line. If you only answered a question, need more information, or are waiting for the user's go-ahead, do not add it.",
         ]
         if toolsAvailable {
             bullets.append(bunnyToolsSentence)

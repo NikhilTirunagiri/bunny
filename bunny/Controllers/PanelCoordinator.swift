@@ -26,8 +26,14 @@ final class PanelCoordinator {
 
     /// Selected notes in the notes list (`SelectionModel`).
     private(set) var selection = SelectionModel.Selection() {
-        didSet { if selection.single != oldValue.single { onOpenTaskChange?() } }
+        didSet {
+            guard selection.single != oldValue.single else { return }
+            if handOffCardTaskID != selection.single { handOffCardTaskID = nil }
+            onOpenTaskChange?()
+        }
     }
+    /// The note whose Hand off options card is open (it stays open while choices are made).
+    var handOffCardTaskID: UUID?
     /// The note shown in the note side: the single selected note.
     var openTaskID: UUID? { selection.single }
     /// The note the note side renders: follows `openTaskID`, but the window controller keeps it until
@@ -81,6 +87,9 @@ final class PanelCoordinator {
     @ObservationIgnored private(set) var timerPickerShown = false
     /// The "attach files" open panel is showing; the window must not close when it takes key.
     @ObservationIgnored private(set) var filePickerShown = false
+
+    /// The main window is on screen (set by the window controller).
+    @ObservationIgnored var windowShown = false
 
     @ObservationIgnored var onOpenTaskChange: (() -> Void)?
     @ObservationIgnored var onTransientUIEnded: (() -> Void)?
@@ -264,16 +273,24 @@ final class PanelCoordinator {
         if !shown { onTransientUIEnded?() }
     }
 
-    /// The plus of Attachments: the system open panel, for files and folders. It takes key, so the
-    /// window is kept open underneath it (`filePickerShown`) and takes key back when it is done. It
-    /// floats above the main window, which sits at the status bar level.
-    func pickFiles(_ completion: @escaping ([URL]) -> Void) {
+    /// "Hand Off Options…": shows the note with its options card open.
+    func openHandOffCard(_ id: UUID) {
+        open(id)
+        handOffCardTaskID = id
+    }
+
+    /// The plus of Attachments (files and folders), or the options card's "Choose Folder…"
+    /// (`foldersOnly`, one folder): the system open panel. It takes key, so the window is kept open
+    /// underneath it (`filePickerShown`) and takes key back when it is done. It floats above the main
+    /// window, which sits at the status bar level.
+    func pickFiles(foldersOnly: Bool = false, _ completion: @escaping ([URL]) -> Void) {
         guard !filePickerShown else { return }
         let open = NSOpenPanel()
-        open.canChooseFiles = true
+        open.canChooseFiles = !foldersOnly
         open.canChooseDirectories = true
-        open.allowsMultipleSelection = true
-        open.prompt = "Attach"
+        open.canCreateDirectories = foldersOnly
+        open.allowsMultipleSelection = !foldersOnly
+        open.prompt = foldersOnly ? "Choose" : "Attach"
         open.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         filePickerShown = true
         NSApp.activate()

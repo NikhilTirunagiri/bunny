@@ -5,7 +5,9 @@ import Testing
 struct ClaudeWireTests {
     @Test func parsesInitialized() {
         let line = Data(#"{"type":"system","subtype":"init","session_id":"abc","cwd":"/tmp"}"#.utf8)
-        #expect(ClaudeWire.parse(line) == .initialized(sessionID: "abc"))
+        #expect(ClaudeWire.parse(line) == .initialized(sessionID: "abc", model: nil))
+        let withModel = Data(#"{"type":"system","subtype":"init","session_id":"abc","model":"claude-fable-5"}"#.utf8)
+        #expect(ClaudeWire.parse(withModel) == .initialized(sessionID: "abc", model: "claude-fable-5"))
     }
 
     @Test func parsesAssistantTextBlocksJoinedByNewline() {

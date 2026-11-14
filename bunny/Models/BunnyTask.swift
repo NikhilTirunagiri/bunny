@@ -21,10 +21,13 @@ final class BunnyTask {
 
     // Agent handoff (spec §4). Raw values keep the store schema plain; use the computed accessors below.
     var agentHarness: String? = nil
-    /// `agentHarness` was picked in the agent menu (outranks Settings' default); otherwise it only records the last run.
+    /// `agentHarness` was picked in the Hand off options card (outranks Settings' default); otherwise it only records the last run.
     var agentHarnessChosen: Bool = false
     var agentState: String = "idle"
     var agentSessionID: String? = nil
+    /// The agent `agentSessionID` belongs to. `agentHarness` can move on (the options card picks the
+    /// agent of the NEXT hand-off) while this session is still opened and messaged with its own agent.
+    var agentSessionHarness: String? = nil
     var agentWorkingDirectory: String? = nil
     var agentActivity: String = ""
     var agentSummary: String = ""
@@ -35,6 +38,13 @@ final class BunnyTask {
     /// Per-run model/effort override (spec §2), kept so resumes use the same settings. nil = use Settings.
     var agentModel: String? = nil
     var agentEffort: String? = nil
+    /// The folder picked for this note in the Hand off options card: a path, or
+    /// `WorkingDirectoryResolver.bunnyFolderChoice`. nil = attachments, then Settings (v3 spec §7 "Folder").
+    var agentFolderChoice: String? = nil
+    /// The short conversation with the agent (`AgentThread`, JSON): messages sent from Bunny and the agent's replies.
+    var agentThreadData: Data? = nil
+    /// When the agent part of this note was last shown; an agent message after it is unread.
+    var agentSeenAt: Date? = nil
 
     init(title: String, parentID: UUID? = nil, sortOrder: Int = 0) {
         self.title = title

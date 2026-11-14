@@ -34,9 +34,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         TaskActions.migrateArchived(in: modelContainer.mainContext)
 
         UNUserNotificationCenter.current().delegate = self
-        // Bunny tools (spec §5): agents manage tasks through the local MCP server.
+        // Agents are opt-in: nothing of theirs starts unless one is switched on. Bunny tools (the
+        // local MCP server) listen only while they are switched on too.
+        AgentEnablement.shared.migrateIfNeeded(context: modelContainer.mainContext)
+        AgentSettings.migrateOpenIn()
         BunnyToolsServer.shared.backend = BunnyToolsBackendImpl(modelContainer: modelContainer)
-        BunnyToolsServer.shared.start()
+        AgentEnablement.shared.syncToolsServer()
         AgentSupervisor.shared.configure(modelContainer: modelContainer)
         WindowManager.shared.modelContainer = modelContainer
         statusBarController.setup(modelContainer: modelContainer)
@@ -44,10 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MidnightScheduler.shared.modelContext = modelContainer.mainContext
         MidnightScheduler.shared.schedule()
 
-        if !UserDefaults.standard.bool(forKey: "onboarding.completed") {
+        if !UserDefaults.standard.bool(forKey: WindowManager.onboardingCompletedKey) {
             WindowManager.shared.showOnboarding()
-        } else {
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         }
     }
 
@@ -90,5 +91,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in
             self.statusBarController.openWindow(showing: taskID)
         }
+    }
+}
+
+/// Notifications are asked for the first time one is about to be needed (a timer started, a note
+/// handed off), never at launch. The system shows its prompt once; later calls do nothing.
+enum NotificationPermission {
+    static func request() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 }

@@ -44,6 +44,23 @@ enum SnapshotRunner {
         var setUp: (Sample, PanelCoordinator) -> Void = { _, _ in }
         /// Input sent to the laid-out window before it is drawn (see `Driver`).
         var act: (Driver) -> Void = { _ in }
+        /// The switched-on agents and Bunny tools (in memory only).
+        var agents: [AgentHarness] = [.claudeCode, .codex]
+        var tools = false
+
+        func then(_ more: @escaping (Driver) -> Void) -> State {
+            var state = self
+            let first = act
+            state.act = { first($0); more($0) }
+            return state
+        }
+
+        func agents(_ agents: [AgentHarness], tools: Bool = false) -> State {
+            var state = self
+            state.agents = agents
+            state.tools = tools
+            return state
+        }
     }
 
     /// Sends key events straight to the snapshot window (`NSWindow.sendEvent`, in-process), so a state
@@ -71,8 +88,26 @@ enum SnapshotRunner {
             settle()
         }
 
-        func pressReturn() {
-            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        /// Types `text` in the "Message <Agent>…" field, puts the caret `offset` characters in,
+        /// presses Shift-Return there and types on.
+        func breakMessageLine(_ text: String, at offset: Int) {
+            guard let field = Self.find(NSTextField.self, in: window.contentView, where: {
+                ($0.placeholderString ?? $0.placeholderAttributedString?.string)?.hasPrefix("Message") == true
+            }) else { return }
+            window.makeFirstResponder(field)
+            settle()
+            guard let editor = window.firstResponder as? NSTextView else { return }
+            editor.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            editor.setSelectedRange(NSRange(location: offset, length: 0))
+            settle()
+            pressReturn(modifiers: .shift)
+            // Typed where the caret now is.
+            editor.insertText("And ", replacementRange: NSRange(location: NSNotFound, length: 0))
+            settle()
+        }
+
+        func pressReturn(modifiers: NSEvent.ModifierFlags = []) {
+            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
                                             windowNumber: window.windowNumber, context: nil, characters: "\r",
                                             charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36) {
                 window.sendEvent(event)
@@ -80,16 +115,20 @@ enum SnapshotRunner {
             settle()
         }
 
-        private static func find<T: NSView>(_ type: T.Type, in view: NSView?) -> T? {
+        private static func find<T: NSView>(_ type: T.Type, in view: NSView?, where matches: (T) -> Bool = { _ in true }) -> T? {
             guard let view else { return nil }
-            if let match = view as? T { return match }
-            return view.subviews.lazy.compactMap { find(type, in: $0) }.first
+            if let match = view as? T, matches(match) { return match }
+            for subview in view.subviews {
+                if let match = find(type, in: subview, where: matches) { return match }
+            }
+            return nil
         }
     }
 
     static let states: [State] = [
         State(name: "list-default"),
         State(name: "list-hovered", hovered: { $0.plain.id }),
+        State(name: "list-hovered-agents-off", hovered: { $0.plain.id }).agents([]),
         State(name: "list-one-selected", setUp: {  sample, coordinator in
             coordinator.apply(.select(sample.details.id))
         }),
@@ -190,16 +229,45 @@ enum SnapshotRunner {
                   driver.typeDetails("Check the migration first.\nThen the tests: https://example.com/pull/42\n\nAsk Nikhil about the flaky one.")
               }),
         noteSide("note-subtask") { $0.subtask },
+        // The agent part open, one state each (v3 spec §7).
         noteSide("note-needs-input") { $0.question },
+        noteSide("note-needs-input-approval") { $0.approval },
         noteSide("note-agent-running") { $0.running },
-        noteSide("note-agent-failed") { $0.failed },
+        noteSide("note-agent-failed", agentOpen: true) { $0.failed },
+        noteSide("note-agent-failed-details", agentOpen: true, configure: { AgentPanelState.shared.detailsOpen.insert($0.failed.id) }) { $0.failed },
+        noteSide("note-agent-replied", agentOpen: true) { $0.replied },
+        // Shift-Return with the caret between the two sentences: the line break goes there.
+        noteSide("note-agent-message-newline", agentOpen: true) { $0.replied }
+            .then { $0.breakMessageLine("Move them into old.keep the README.", at: 19) },
+        noteSide("note-agent-finished", height: 620, agentOpen: true) { $0.finished },
+        noteSide("note-agent-thread-expanded", height: 760, agentOpen: true, configure: {
+            AgentPanelState.shared.threadExpanded.insert($0.finished.id)
+            AgentPanelState.shared.messagesExpanded.insert($0.finished.id)
+        }) { $0.finished },
+        noteSide("note-agent-stopped", agentOpen: true) { $0.stopped },
+        // The note open, the agent folded to one row above the footer.
+        noteSide("note-agent-folded", agentOpen: false) { $0.running },
+        noteSide("note-agent-folded-finished", agentOpen: false) { $0.finished },
+        // The Welcome window's two pages (its content; the title bar is not shown).
+        welcome("welcome-1", page: 0),
+        welcome("welcome-2-found", page: 1, found: [.claudeCode: true, .codex: true]).agents([.claudeCode]),
+        welcome("welcome-2-not-found", page: 1, found: [.claudeCode: true, .codex: false]).agents([]),
+        // Both agents off: no Hand off anywhere, but a note's old agent section stays.
+        noteSide("note-agents-off") { $0.failed }.agents([]),
+        noteSide("note-plain-agents-off") { $0.details }.agents([]),
+        // The Hand off options card, over a note with an attached folder.
+        noteSide("note-handoff-card", card: true) { $0.details },
+        noteSide("note-handoff-card-claude-only", card: true) { $0.plain }.agents([.claudeCode]),
         // The Settings window's content, one state per page. Not shown: the title bar (the sidebar
         // starts below it in the real window), and the menus of the pop-up buttons.
         settings("settings-general", page: .general),
         settings("settings-appearance", page: .appearance),
         settings("settings-notes", page: .notes),
         settings("settings-agents", page: .agents),
-        settings("settings-agents-advanced", page: .agents, height: 1500) { $0.advancedExpanded = true },
+        settings("settings-agents-off", page: .agents).agents([]),
+        settings("settings-agents-claude-only", page: .agents).agents([.claudeCode]),
+        settings("settings-agents-advanced", page: .agents, height: 1500) { $0.advancedExpanded = true }.agents([.claudeCode, .codex], tools: true),
+        settings("settings-agents-advanced-tools-off", page: .agents, height: 1500) { $0.advancedExpanded = true },
         settings("settings-data", page: .data),
         settings("settings-about", page: .about),
         // "trash" typed in the sidebar, and its second result chosen.
@@ -221,16 +289,37 @@ enum SnapshotRunner {
         })
     }
 
-    /// The full card (list and note side) with one note open.
-    private static func noteSide(_ name: String, hovered: @escaping (Sample) -> UUID? = { _ in nil },
+    private static func welcome(_ name: String, page: Int, found: [AgentHarness: Bool] = [:]) -> State {
+        State(name: name, width: OnboardingView.size.width, height: OnboardingView.size.height, content: { _ in
+            AnyView(OnboardingView(page: page, found: found, live: false))
+        })
+    }
+
+    /// The full card (list and note side) with one note open. `agentOpen`: which part of a handed-off
+    /// note is open (nil: the default for its state); `configure` sets what is unfolded.
+    private static func noteSide(_ name: String, height: CGFloat? = nil,
+                                 hovered: @escaping (Sample) -> UUID? = { _ in nil }, card: Bool = false,
+                                 agentOpen: Bool? = nil, configure: @escaping (Sample) -> Void = { _ in },
                                  _ note: @escaping (Sample) -> BunnyTask) -> State {
-        State(name: name, width: WindowPlacement.listWidth + WindowPlacement.noteWidth, hovered: hovered,
+        State(name: name, width: WindowPlacement.listWidth + WindowPlacement.noteWidth, height: height ?? MainWindowController.height, hovered: hovered,
               setUp: { sample, coordinator in
                   let id = note(sample).id
+                  let panelState = AgentPanelState.shared
+                  panelState.threadExpanded = []
+                  panelState.messagesExpanded = []
+                  panelState.detailsOpen = []
+                  configure(sample)
                   coordinator.apply(.select(id))
                   // What the window controller does when a note opens.
                   coordinator.displayedNoteID = id
                   coordinator.noteSideShown = true
+                  if card { coordinator.handOffCardTaskID = id }
+              }, act: { driver in
+                  // After the note side appeared (it picks the default part then).
+                  if let agentOpen, let id = PanelCoordinator.shared.openTaskID {
+                      AgentPanelState.shared.agentOpen[id] = agentOpen
+                      driver.settle()
+                  }
               })
     }
 
@@ -239,6 +328,10 @@ enum SnapshotRunner {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
             let coordinator = PanelCoordinator.shared
+            CodexModelStore.shared.snapshotSet([
+                CodexModel(id: "gpt-5.5-codex", displayName: "GPT-5.5 Codex", efforts: ["low", "medium", "high"],
+                           defaultEffort: "medium", isDefault: true),
+            ])
             for dark in [true, false] {
                 let full = try ModelContainer(for: BunnyTask.self, ShelfItem.self, configurations: configuration)
                 let empty = try ModelContainer(for: BunnyTask.self, ShelfItem.self, configurations: configuration)
@@ -246,6 +339,7 @@ enum SnapshotRunner {
                 NSApp.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                 for state in states {
                     coordinator.snapshotReset()
+                    AgentEnablement.shared.snapshotSet(state.agents, tools: state.tools)
                     state.setUp(sample, coordinator)
                     let view = (state.content?(sample) ?? AnyView(MainWindowView()))
                         .environment(\.snapshotHoveredID, state.hovered(sample))
@@ -300,6 +394,10 @@ enum SnapshotRunner {
         let running: BunnyTask
         let question: BunnyTask
         let failed: BunnyTask
+        let approval: BunnyTask
+        let finished: BunnyTask
+        let replied: BunnyTask
+        let stopped: BunnyTask
         let imageAttachment: ShelfItem
 
         init(in context: ModelContext) {
@@ -360,6 +458,13 @@ enum SnapshotRunner {
                 $0.agentActivity = "Running the test suite"
                 $0.agentSessionID = "sample-session-3"
                 $0.agentStartedAt = Date().addingTimeInterval(-95)
+                $0.agentHarness = AgentHarness.claudeCode.rawValue
+                $0.agentWorkingDirectory = NSHomeDirectory() + "/Projects/login-service"
+                $0.taskDescription = "It fails about one run in ten on CI, never locally. Probably the session cookie race.\nLogs are attached."
+                $0.agentThreadData = Self.thread([
+                    (.agent, "The test waits on a fixed 200 ms sleep. I can replace it with a wait on the session event."),
+                    (.user, "Yes, do that. And run the whole suite, not only this test."),
+                ])
             }
             question = note("Migrate the settings screen") {
                 $0.runState = .needsInput
@@ -375,7 +480,70 @@ enum SnapshotRunner {
             }
             failed = note("Update the changelog script") {
                 $0.runState = .failed
-                $0.agentSummary = "The CLI exited with status 1."
+                $0.agentSummary = "error: unexpected argument '--effort' found\n\nUsage: codex app-server [OPTIONS]\n\nFor more information, try '--help'.\nexited with code 2"
+                $0.agentStartedAt = Date().addingTimeInterval(-70)
+                $0.agentFinishedAt = Date().addingTimeInterval(-66)
+                $0.agentHarness = AgentHarness.codex.rawValue
+                $0.agentSessionID = "sample-session-4"
+                $0.agentWorkingDirectory = NSHomeDirectory() + "/Projects/tools"
+            }
+            approval = note("Clean up the old build folders") {
+                $0.runState = .needsInput
+                $0.agentHarness = AgentHarness.codex.rawValue
+                $0.agentSessionID = "sample-session-5"
+                $0.agentStartedAt = Date().addingTimeInterval(-48)
+                $0.agentActivity = "Running ls build"
+                $0.agentQuestionData = try? JSONEncoder().encode(AgentQuestion(
+                    kind: .approval, items: [], approvalTitle: "Run command",
+                    approvalDetail: "rm -rf build/intermediates build/tmp", requestID: "7", method: "execCommandApproval", rawInput: nil))
+            }
+            stopped = note("Sort the screenshots folder") {
+                $0.runState = .stopped
+                $0.agentHarness = AgentHarness.claudeCode.rawValue
+                $0.agentSessionID = "sample-session-6"
+                $0.agentActivity = "Interrupted — Bunny quit"
+                $0.agentStartedAt = Date().addingTimeInterval(-900)
+                $0.agentFinishedAt = Date().addingTimeInterval(-600)
+            }
+            replied = note("Clear out the exports folder") {
+                $0.runState = .replied
+                $0.agentHarness = AgentHarness.claudeCode.rawValue
+                $0.agentSessionID = "sample-session-8"
+                $0.agentStartedAt = Date().addingTimeInterval(-200)
+                $0.agentFinishedAt = Date().addingTimeInterval(-170)
+                $0.agentWorkingDirectory = NSHomeDirectory() + "/Projects/exports"
+                $0.agentThreadData = Self.thread([
+                    (.user, "What do you see in this folder?"),
+                    (.agent, "Three CSV exports from March, a README, and an empty folder named old. Should I delete the CSVs, or move them into old?"),
+                ])
+            }
+            finished = note("Add a dark mode to the docs site") {
+                complete($0, minutesAgo: 11, byAgent: true)
+                $0.runState = .finished
+                $0.agentHarness = AgentHarness.claudeCode.rawValue
+                $0.agentSessionID = "sample-session-7"
+                $0.agentStartedAt = Date().addingTimeInterval(-1_300)
+                $0.agentFinishedAt = Date().addingTimeInterval(-700)
+                $0.agentWorkingDirectory = NSHomeDirectory() + "/Projects/docs"
+                let summary = """
+                    Dark mode is in. The site follows the system setting and has a switch in the header that \
+                    remembers the choice.
+
+                    Changed: theme.css (a second palette under prefers-color-scheme), header.html (the switch), \
+                    and site.js (stores the choice). Code blocks use a darker variant of the same syntax theme.
+
+                    Not done: the three diagrams on the Architecture page are PNGs with a white background. \
+                    Preview: https://example.com/docs-preview/dark
+                    """
+                $0.agentSummary = summary
+                $0.agentThreadData = Self.thread([
+                    (.agent, "Which pages should get it first?"),
+                    (.user, "All of them"),
+                    (.agent, "Done: every page has both palettes now. Want a switch in the header too?"),
+                    (.user, "Yes, and remember the choice."),
+                    (.user, "Keep the code blocks readable."),
+                    (.agent, summary),
+                ])
             }
             _ = note("Renew the domain") { complete($0, minutesAgo: 5) }
             _ = note("Send the expense report") { complete($0, minutesAgo: 50) }
@@ -397,6 +565,14 @@ enum SnapshotRunner {
             }
             _ = note("Old report drafts") { $0.deletedAt = Date().addingTimeInterval(-day) }
             try? context.save()
+        }
+
+        private static func thread(_ messages: [(AgentThread.Role, String)]) -> Data? {
+            var data: Data?
+            for (index, message) in messages.enumerated() {
+                data = AgentThread.appending(message.0, message.1, at: Date().addingTimeInterval(Double(index - messages.count) * 60), to: data)
+            }
+            return data
         }
 
         /// A small picture for the image attachment's thumbnail.
@@ -421,6 +597,7 @@ extension PanelCoordinator {
         displayedNoteID = nil
         noteSideShown = false
         snapshotSetCompletedExpanded(false)
+        handOffCardTaskID = nil
     }
 }
 #endif

@@ -157,11 +157,14 @@ final class ClaudeCodeRunner: AgentRunner {
 
     private func handle(_ line: Data) {
         switch ClaudeWire.parse(line) {
-        case let .initialized(id):
+        case let .initialized(id, model):
             sessionID = id
             if id != announcedSessionID {
                 announcedSessionID = id
                 emit(.sessionStarted(id))
+                if let model = AgentRunnerText.nonEmpty(model) {
+                    emit(.modelReported(model))
+                }
             }
         case let .assistantText(text):
             let activity = AgentRunnerText.activityLine(text)

@@ -13,6 +13,8 @@ struct SettingsView: View {
             detail
         }
         .frame(minWidth: 680, minHeight: 420)
+        // Settings' pop-up buttons drop their menus down below themselves.
+        .environment(\.popUpMenusDropDown, true)
         .background(Rectangle().fill(BunnyTheme.background()).ignoresSafeArea())
     }
 
