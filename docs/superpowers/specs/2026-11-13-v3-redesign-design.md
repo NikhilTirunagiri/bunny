@@ -276,3 +276,32 @@ toggles with detection status. Closing or skipping counts as done.
   user can judge look and feel.
 - `HoverIntent` and the hover/lock coordinator are removed with the popover/panel pair.
 - No new dependencies.
+
+## 13. Amendments after Phase 1–2 testing (these win over the sections above)
+
+- **No Archive.** The Archive feature is removed everywhere (§4, §6, §8). The app has the notes
+  list with its Completed group, the Trash, and Settings. Notes archived by older versions are
+  moved to Trash once at launch (`deletedAt = now`, `archivedAt` cleared; the property stays for
+  schema stability and nothing else reads it).
+- **Completed retention.** Completed top-level notes move to Trash after `notes.completedRetention`:
+  24 hours (default), 7 days, or never. Done subtasks stay under an open parent. Restoring a
+  completed note from Trash resets `completedAt`. Settings → Notes has this instead of the two
+  archive rows.
+- **Bottom bar is permanent**: Trash (soft red) at the left, Settings at the right, in every view.
+  In the Trash view the Trash button is active and returns to notes; a slim header with a back
+  chevron and title sits at the top; Esc goes back.
+- **Action strip.** Selection actions, Undo (3 s), the Copied notice and the Trash view's standing
+  line ("Deleted after N days" + Empty Trash) live in one strip above the bottom bar, never in it.
+- **Trash keyboard**: ⌘A, ↑/↓, ⌫ (Delete Forever via the confirmation), Esc.
+- **Window**: the list hangs to the right of the status item; the note side opens to its left. The
+  window frame is constant and the card is drawn in SwiftUI; only the card animates. The surface is
+  solid for now (glass left a ghost on close and, applied to content, blocks drops); a Glass option
+  returns only if both are solved.
+- **Search**: an empty-space click leaves search.
+- **Timer**: starting a timer shows the note in the menu bar by default (checkbox in the picker);
+  the end-of-timer notification fires for every timer.
+- **Agents (pulled forward from Phase 4)**: never the home folder (Bunny's own empty folder is the
+  default workspace); "Ask before running commands" is the default; the row's agent button never
+  opens an external app.
+- **Tooling**: `bunny --snapshot <dir>` (Debug) renders fixed UI states to PNGs; implementers use
+  it to check layout. Nothing may script the desktop or need a privacy permission.

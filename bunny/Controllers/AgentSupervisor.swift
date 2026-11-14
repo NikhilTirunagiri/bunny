@@ -313,8 +313,8 @@ final class AgentSupervisor {
         didChangeState()
     }
 
-    /// Called before a task is archived or deleted: stops its live runner.
-    func taskWillArchiveOrDelete(_ taskID: UUID) {
+    /// Called before a task moves to Trash or is deleted: stops its live runner.
+    func taskWillBeDeleted(_ taskID: UUID) {
         if let task = task(with: taskID) {
             stop(task)
         } else {
@@ -514,12 +514,12 @@ final class AgentSupervisor {
         )
     }
 
-    /// Non-archived children in list order (`sortOrder`, then `createdAt`) — the brief's numbering.
+    /// Children not in Trash, in list order (`sortOrder`, then `createdAt`) — the brief's numbering.
     private func subtasks(of task: BunnyTask) -> [BunnyTask] {
         guard let context else { return [] }
         let parentID: UUID? = task.id
         let descriptor = FetchDescriptor<BunnyTask>(
-            predicate: #Predicate { $0.parentID == parentID && $0.archivedAt == nil && $0.deletedAt == nil },
+            predicate: #Predicate { $0.parentID == parentID && $0.deletedAt == nil },
             sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]
         )
         return (try? context.fetch(descriptor)) ?? []
@@ -650,7 +650,7 @@ final class AgentSupervisor {
 
     private func checkTimers() {
         guard let context else { return }
-        // Also picks up archives/deletions made elsewhere (only a needsInput task can be counted).
+        // Also picks up deletions made elsewhere (only a needsInput task can be counted).
         if attentionCount > 0 {
             recomputeAttention()
         }
@@ -716,7 +716,7 @@ final class AgentSupervisor {
         guard let context else { return }
         let needsInput = AgentRunState.needsInput.rawValue
         let descriptor = FetchDescriptor<BunnyTask>(
-            predicate: #Predicate { $0.agentState == needsInput && $0.archivedAt == nil && $0.deletedAt == nil }
+            predicate: #Predicate { $0.agentState == needsInput && $0.deletedAt == nil }
         )
         let count = (try? context.fetchCount(descriptor)) ?? attentionCount
         if count != attentionCount {

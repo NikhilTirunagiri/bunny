@@ -76,83 +76,108 @@ struct ContentView: View {
     @Query(sort: [SortDescriptor(\BunnyTask.sortOrder), SortDescriptor(\BunnyTask.createdAt)])
     private var allTasks: [BunnyTask]
 
-    @State private var newTaskTitle = ""
     @State private var listHeight: CGFloat = 0
-    @FocusState private var newTaskFocused: Bool
 
-    /// Not archived and not in Trash.
-    private var allActiveTasks: [BunnyTask] {
-        allTasks.filter { $0.archivedAt == nil && $0.deletedAt == nil }
+    /// Not in Trash.
+    private var liveTasks: [BunnyTask] { allTasks.filter(\.isLive) }
+
+    /// A top-level note and the subtasks listed under it.
+    private struct NoteGroup: Identifiable {
+        let note: BunnyTask
+        let subtasks: [BunnyTask]
+        /// The parent shows its chevron and hides the subtasks when folded. Off in search results.
+        var foldable = true
+        var id: UUID { note.id }
+
+        var showsSubtasks: Bool { !subtasks.isEmpty && (!foldable || note.isExpanded) }
+        var ids: [UUID] { [note.id] + (showsSubtasks ? subtasks.map(\.id) : []) }
     }
 
-    /// Rows in display order, subtasks of expanded parents included (selection and arrow keys).
-    private var visibleIDs: [UUID] {
-        topLevelTasks.flatMap { task in
-            [task.id] + (task.isExpanded ? subtasks(of: task).map(\.id) : [])
+    /// What the list shows, top to bottom.
+    private struct Sections {
+        var open: [NoteGroup] = []
+        /// Completed top-level notes, most recently completed first. Their subtasks stay with them.
+        var completed: [NoteGroup] = []
+        /// nil unless a search is typed: the matching notes.
+        var results: [NoteGroup]?
+    }
+
+    private var sections: Sections {
+        let live = liveTasks
+        let query = coordinator.searching ? coordinator.searchQuery.trimmingCharacters(in: .whitespaces) : ""
+        func matches(_ task: BunnyTask) -> Bool {
+            NoteText.matches(query: query, title: task.title, details: task.taskDescription)
         }
+        var sections = Sections()
+        if !query.isEmpty {
+            // A note is listed when it matches or one of its subtasks does; under it, the matching subtasks.
+            sections.results = live.filter { !$0.isSubtask }.compactMap { note -> NoteGroup? in
+                let subtasks = live.filter { $0.parentID == note.id && matches($0) }
+                guard matches(note) || !subtasks.isEmpty else { return nil }
+                return NoteGroup(note: note, subtasks: subtasks, foldable: false)
+            }
+            return sections
+        }
+        let groups = live.filter { !$0.isSubtask }.map { note in
+            NoteGroup(note: note, subtasks: live.filter { $0.parentID == note.id })
+        }
+        sections.open = groups.filter { !$0.note.isCompleted }
+        sections.completed = groups.filter(\.note.isCompleted).sorted {
+            ($0.note.completedAt ?? .distantPast) > ($1.note.completedAt ?? .distantPast)
+        }
+        return sections
     }
 
-    private var topLevelTasks: [BunnyTask] {
-        allActiveTasks.filter { $0.parentID == nil }
-    }
-
-    private func subtasks(of task: BunnyTask) -> [BunnyTask] {
-        allActiveTasks.filter { $0.parentID == task.id }
+    /// Rows in display order (selection and arrow keys): only what is on screen.
+    private var visibleIDs: [UUID] {
+        let sections = sections
+        if let results = sections.results { return results.flatMap(\.ids) }
+        return (sections.open + (coordinator.completedExpanded ? sections.completed : [])).flatMap(\.ids)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if coordinator.showingArchive {
-                ArchiveView { coordinator.showingArchive = false }
+            if coordinator.showingTrash {
+                TrashView()
             } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "plus")
-                        .foregroundStyle(.secondary)
-                    TextField("What's next on your list?", text: $newTaskTitle)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 15))
-                        .focused($newTaskFocused)
-                        .onSubmit { addTask() }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 10, style: .continuous))
-                .padding(.horizontal, 10)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
-
+                NoteFieldView { addNote($0, attachClipboard: $1) }
                 taskListView
-                bottomBar
+                selectionStrip
+            }
+            ListBottomBar()
+        }
+        .overlay {
+            if let confirmation = coordinator.deleteConfirmation {
+                DeleteConfirmationView(confirmation: confirmation)
             }
         }
         .containerShape(.rect(cornerRadius: 16))
         .frame(width: 340)
-        // Every open starts on the notes list with focus in the New note field.
-        .onChange(of: coordinator.windowOpenCount) { newTaskFocused = true }
-        // Async: coming from the Archive view, the field only exists after this update.
-        .onChange(of: coordinator.newNoteFocusRequests) { DispatchQueue.main.async { newTaskFocused = true } }
-        .onChange(of: newTaskFocused) { _, focused in coordinator.newNoteFieldFocused = focused }
         .onChange(of: visibleIDs, initial: true) { _, ids in
             coordinator.visibleIDs = ids
-            coordinator.pruneSelection(keeping: Set(allActiveTasks.map(\.id)))
+            // The selection follows what is on screen. The one open note stays open while it is
+            // still in the list (e.g. just completed into the folded Completed group).
+            let live = Set(liveTasks.map(\.id))
+            let openNoteStays = coordinator.selection.single.map(live.contains) ?? false
+            coordinator.pruneSelection(keeping: openNoteStays ? live : Set(ids))
         }
     }
 
     private var taskListView: some View {
-        ScrollView {
+        let sections = sections
+        return ScrollViewReader { proxy in ScrollView {
             // Rows pad themselves 1 pt above and below (part of their drop target), so the
             // 2 pt gap between groups comes from the rows and subtasks overlap it away (-2).
             LazyVStack(spacing: 0) {
-                ForEach(topLevelTasks) { task in
-                    let subs = subtasks(of: task)
-                    // Each row is its own drag source and drop target (TaskRowView / RowDropDelegate);
-                    // subtasks keep their parentID, so a collapsed parent moves with them.
-                    VStack(spacing: -2) {
-                        TaskRowView(task: task, hasSubtasks: !subs.isEmpty)
-                        if task.isExpanded && !subs.isEmpty {
-                            ForEach(subs) { sub in
-                                TaskRowView(task: sub, hasSubtasks: false)
-                            }
+                if let results = sections.results {
+                    ForEach(results) { group(for: $0, reorderable: false) }
+                } else {
+                    ForEach(sections.open) { group(for: $0, reorderable: true) }
+                    if !sections.completed.isEmpty {
+                        completedHeader(count: sections.completed.count)
+                            .id(Self.completedHeaderID)
+                        if coordinator.completedExpanded {
+                            ForEach(sections.completed) { group(for: $0, reorderable: false) }
                         }
                     }
                 }
@@ -160,80 +185,102 @@ struct ContentView: View {
             // Same inset as the New note field so row highlights line up with it.
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            // A click on empty space (below the rows or beside them) clears the selection; rows and
-            // their controls take their own clicks first.
+            // A click on empty space (below the rows or beside them) leaves search or clears the
+            // selection; rows and their controls take their own clicks first.
             .frame(minHeight: listHeight, alignment: .top)
             .contentShape(Rectangle())
             .onTapGesture { coordinator.emptySpaceClicked() }
         }
-        .frame(minHeight: 360)
+        // Unfolding brings the group into view: below a long list it would open off screen.
+        .onChange(of: coordinator.completedExpanded) { _, expanded in
+            if expanded { withAnimation { proxy.scrollTo(Self.completedHeaderID, anchor: .top) } }
+        }
+        }
+        // Low enough that a four-line draft and the quick-capture strip still fit the card above it.
+        .frame(minHeight: 240)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
+        .overlay {
+            if let results = sections.results {
+                if results.isEmpty {
+                    emptyState("No matches", "Search looks in titles and details.")
+                }
+            } else if sections.open.isEmpty && sections.completed.isEmpty {
+                emptyState("No notes yet", "Type above and press Return.")
+            }
+        }
     }
 
-    private var bottomBar: some View {
-        GlassEffectContainer(spacing: 8) {
-            if coordinator.selection.ids.count > 1 {
-                selectionBar
-            } else {
-                HStack {
-                    Button {
-                        coordinator.showArchive()
-                    } label: {
-                        Image(systemName: "archivebox")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .controlSize(.large)
-                    .padding(.leading, 14)
-                    .help("Archive and Trash")
+    private static let completedHeaderID = "completed"
 
-                    Spacer()
+    /// "N selected · Complete · Delete" while several notes are selected; otherwise the Undo
+    /// offer or a notice. The Space and ⌫ hints are tooltips: inline they would not fit the width.
+    private var selectionStrip: some View {
+        let ids = coordinator.selection.ids
+        return ActionStrip(selected: ids.count > 1 ? ids.count : 0) {
+            Button("Complete") { TaskActions.complete(ids, in: modelContext, undoable: true) }
+                .help("Complete (Space)")
+            Button("Delete") { TaskActions.moveToTrash(ids, in: modelContext, undoable: true) }
+                .buttonStyle(.bunnyDestructive)
+                .help("Move to Trash (⌫)")
+        }
+    }
 
-                    Button {
-                        WindowManager.shared.showSettings()
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .controlSize(.large)
-                    .padding(.trailing, 14)
-                    .help("Settings")
+    /// Each row is its own drag source and drop target (TaskRowView / RowDropDelegate);
+    /// subtasks keep their parentID, so a collapsed parent moves with them.
+    private func group(for group: NoteGroup, reorderable: Bool) -> some View {
+        let done = group.subtasks.filter(\.isCompleted).count
+        return VStack(spacing: -2) {
+            TaskRowView(task: group.note, hasSubtasks: group.foldable && !group.subtasks.isEmpty,
+                        progress: group.foldable && !group.subtasks.isEmpty ? "\(done)/\(group.subtasks.count)" : nil,
+                        reorderable: reorderable)
+            if group.showsSubtasks {
+                ForEach(group.subtasks) { sub in
+                    TaskRowView(task: sub, hasSubtasks: false, reorderable: reorderable)
                 }
             }
         }
-        .frame(height: 44)
     }
 
-    /// "N selected · Complete · Archive · Delete" while several notes are selected. The Space and ⌫ hints
-    /// are tooltips: inline they would not fit the 340 pt list width.
-    private var selectionBar: some View {
-        let ids = coordinator.selection.ids
-        return HStack(spacing: 6) {
-            Text("\(ids.count) selected")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button("Complete") { TaskActions.complete(ids, in: modelContext) }
-                .help("Complete (Space)")
-            Button("Archive") { TaskActions.archive(ids, in: modelContext) }
-            Button("Delete", role: .destructive) { TaskActions.moveToTrash(ids, in: modelContext) }
-                .tint(.red)
-                .help("Move to Trash (⌫)")
+    /// "N completed": folds and unfolds the Completed group.
+    private func completedHeader(count: Int) -> some View {
+        Button { coordinator.toggleCompletedGroup() } label: {
+            HStack(spacing: RowMetrics.spacing) {
+                Image(systemName: coordinator.completedExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: RowMetrics.checkbox)
+                Text("\(count) completed")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.leading, RowMetrics.gutter)
+            .padding(.vertical, 7)
         }
-        .buttonStyle(.glass)
-        .padding(.horizontal, 14)
+        .buttonStyle(.bunnyRow)
+        .padding(.top, 6)
     }
 
-    private func addTask() {
-        let title = newTaskTitle.trimmingCharacters(in: .whitespaces)
+    private func emptyState(_ title: String, _ caption: String) -> some View {
+        VStack(spacing: 4) {
+            Text(title)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(caption)
+                .font(.system(size: 12))
+                .foregroundStyle(.tertiary)
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// Return in the New note field: the note goes to the top of the list (below no other top-level
+    /// note's order, so drag-reorder's renumbering keeps it there). Long or multi-line text is split
+    /// into title and details. `attachClipboard`: the quick-capture offer was accepted.
+    private func addNote(_ text: String, attachClipboard: Bool) {
+        let (title, details) = NoteText.split(text)
         guard !title.isEmpty else { return }
-        let task = BunnyTask(title: title, sortOrder: topLevelTasks.count)
+        let top = liveTasks.filter { !$0.isSubtask }.map(\.sortOrder).min() ?? 1
+        let task = BunnyTask(title: title, sortOrder: top - 1)
+        task.taskDescription = details
         modelContext.insert(task)
-        newTaskTitle = ""
+        if attachClipboard { ShelfService.attachClipboard(to: task.id, in: modelContext) }
     }
 }

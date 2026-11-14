@@ -25,7 +25,7 @@ enum SelectionModel {
         case extend(UUID)
         case up, down
         case selectAll
-        /// Notes that left the list (archived, trashed, deleted).
+        /// Notes that left the list (trashed, deleted).
         case removed(Set<UUID>)
         case clear
     }

@@ -1,14 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// Transparent AppKit overlay for a shelf row: starts file drags (copy outside the app, move inside it),
-/// opens on double-click, shows the context menu, and reports hover.
+/// Transparent AppKit overlay for an attachment tile: starts file drags (copy outside the app, move
+/// inside it), opens on double-click, and reports hover.
 struct ShelfItemDragSource: NSViewRepresentable {
     let url: URL?                        // nil = missing file → not draggable
     var toolTip: String?
     var onDragEnded: (NSDragOperation) -> Void
     var onDoubleClick: () -> Void
-    var menu: () -> NSMenu
     var onHover: (Bool) -> Void
 
     func makeNSView(context: Context) -> DragSourceView { DragSourceView() }
@@ -18,7 +17,6 @@ struct ShelfItemDragSource: NSViewRepresentable {
         view.toolTip = toolTip
         view.onDragEnded = onDragEnded
         view.onDoubleClick = onDoubleClick
-        view.menuProvider = menu
         view.onHover = onHover
     }
 
@@ -26,7 +24,6 @@ struct ShelfItemDragSource: NSViewRepresentable {
         var url: URL?
         var onDragEnded: ((NSDragOperation) -> Void)?
         var onDoubleClick: (() -> Void)?
-        var menuProvider: (() -> NSMenu)?
         var onHover: ((Bool) -> Void)?
         private var mouseDownEvent: NSEvent?
         /// Keeps the source alive for the whole session: the row (and this view) can be torn down mid-drag
@@ -64,12 +61,10 @@ struct ShelfItemDragSource: NSViewRepresentable {
             beginDraggingSession(with: [item], event: down, source: self)
         }
 
-        override func menu(for event: NSEvent) -> NSMenu? { menuProvider?() }
-
         func draggingSession(_ session: NSDraggingSession,
                              sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
             // Outside: copy only, so Finder never moves the original. Inside: move (copy allowed so any
-            // in-app drop target accepts it); the shelf removes the item on any non-empty operation.
+            // in-app drop target accepts it); the tile removes a linked item on any non-empty operation.
             context == .outsideApplication ? .copy : [.move, .copy]
         }
 

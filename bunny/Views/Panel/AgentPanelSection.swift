@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Agent status, questions/approvals and actions for a task (spec §8). Mounted by
-/// `TaskPanelView.agentSection`. Sits in a rounded `.quaternary` fill — the panel root is
-/// already glass, so nothing inside uses `.glassEffect`.
+/// `TaskPanelView.agentSection` once the note was handed off (starting a run is the note side
+/// footer's Hand off). Sits in a rounded `.quaternary` fill; buttons use the shared `BunnyButtonStyle`.
 struct AgentPanelSection: View {
     let task: BunnyTask
     /// Reports whether an answer text field has focus, so the panel holds its editing lock while typing.
@@ -31,63 +31,25 @@ struct AgentPanelSection: View {
     }
 
     var body: some View {
-        if task.runState == .idle && task.agentSessionID == nil {
-            startRow
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                header
-                if !task.agentActivity.isEmpty {
-                    Text(task.agentActivity)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                if task.runState == .needsInput, let question = task.pendingQuestion {
-                    QuestionForm(task: task, question: question, onFocusChange: onAnswerFieldFocusChange)
-                        .id(task.agentQuestionData)
-                }
-                if showsSummary {
-                    summaryView
-                }
-                actionsRow
+        VStack(alignment: .leading, spacing: 8) {
+            header
+            if !task.agentActivity.isEmpty {
+                Text(task.agentActivity)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.quaternary.opacity(0.5)))
-        }
-    }
-
-    // MARK: - Idle
-
-    /// "<Harness> · <model> · <effort>" (owner change request: the button label is just "Handoff").
-    private var caption: String { RunSettingsResolver.caption(runSettings) }
-
-    /// Left-click hands off immediately with the resolved harness/model/effort (`runSettings`: the harness
-    /// the owner picked via the context menu, else Settings' default). Right-click opens `AgentConfigMenu`
-    /// to change the agent, model or effort for this task's next run.
-    private var startRow: some View {
-        Button {
-            AgentSupervisor.shared.start(task, harness: nil)
-        } label: {
-            HStack(spacing: 8) {
-                AgentLogo(harness: harness, size: 16)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Handoff")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text(caption)
-                        .font(.system(size: 10))
-                        .opacity(0.75)
-                }
-                Spacer(minLength: 0)
+            if task.runState == .needsInput, let question = task.pendingQuestion {
+                QuestionForm(task: task, question: question, onFocusChange: onAnswerFieldFocusChange)
+                    .id(task.agentQuestionData)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-        }
-        .buttonStyle(.glassProminent)
-        .contextMenu {
-            if AgentConfigMenu.isAvailable(for: task) {
-                AgentConfigMenu(task: task)
+            if showsSummary {
+                summaryView
             }
+            actionsRow
         }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.quaternary.opacity(0.5)))
     }
 
     // MARK: - Header
@@ -135,9 +97,8 @@ struct AgentPanelSection: View {
                 AgentSupervisor.shared.openSession(task)
             } label: {
                 Label("Chat about this", systemImage: "bubble.left.and.text.bubble.right")
-                    .font(.system(size: 12))
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bunny)
             .disabled(task.agentSessionID == nil)
             .help(task.agentSessionID == nil ? "" : AgentButton.sessionToolsNote)
 
@@ -146,10 +107,8 @@ struct AgentPanelSection: View {
                     AgentSupervisor.shared.stop(task)
                 } label: {
                     Text("Stop")
-                        .font(.system(size: 12))
                 }
-                .buttonStyle(.glass)
-                .tint(.red)
+                .buttonStyle(.bunnyDestructive)
             }
 
             Spacer(minLength: 0)
@@ -157,7 +116,7 @@ struct AgentPanelSection: View {
     }
 }
 
-/// Right-click configuration menu shared by the panel's "Handoff" button and the row `AgentButton`
+/// Configuration menu shared by the note side footer's Hand off arrow and the row `AgentButton` (right-click)
 /// (owner change request, spec §2/§3): choose the agent for this task's next run, its model and effort,
 /// or reset all three to Settings' defaults. Callers show it only while `isAvailable(for:)`: the task has
 /// no session and no active run, so the choice can only affect a new run. The agent is stored in the
@@ -382,7 +341,7 @@ private struct QuestionForm: View {
             Button("Send") {
                 AgentSupervisor.shared.answer(task, with: AgentAnswer(selections: finalSelections(), approved: nil))
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.bunnyProminent)
             .disabled(!canSend)
         }
     }
@@ -438,11 +397,11 @@ private struct QuestionForm: View {
                 Button("Deny") {
                     AgentSupervisor.shared.answer(task, with: AgentAnswer(selections: [:], approved: false))
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bunny)
                 Button("Allow") {
                     AgentSupervisor.shared.answer(task, with: AgentAnswer(selections: [:], approved: true))
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.bunnyProminent)
                 Spacer(minLength: 0)
             }
         }

@@ -2,14 +2,37 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+/// Layout shared by the list's rows and the New note field, so their columns line up.
+enum RowMetrics {
+    /// Leading gutter of a row; a parent's disclosure chevron sits in it.
+    static let gutter: CGFloat = 14
+    /// Width of the checkbox column.
+    static let checkbox: CGFloat = 20
+    static let spacing: CGFloat = 6
+    /// A subtask's checkbox sits under its parent's title.
+    static let subtaskIndent: CGFloat = checkbox + spacing
+    /// Row highlights (hover, selection, drop target), a little tighter than the field's corners.
+    static let highlight = RoundedRectangle(cornerRadius: 8, style: .continuous)
+}
+
+/// One note in the list: checkbox, title, quiet badges, and Hand off on hover. Everything else is in
+/// the context menu.
 struct TaskRowView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AppState.self) private var appState
-    @Environment(TimerManager.self) private var timerManager
     @Environment(PanelCoordinator.self) private var coordinator
+    #if DEBUG
+    @Environment(\.snapshotHoveredID) private var snapshotHoveredID
+    #endif
 
     @Bindable var task: BunnyTask
+    /// Shows the disclosure chevron (a parent with subtasks, outside search results).
     let hasSubtasks: Bool
+    /// "1/2" on a parent: its done and total subtasks.
+    var progress: String? = nil
+    /// False in the Completed group and in search results: the row is no drag source and no reorder
+    /// target, but still takes file drops.
+    var reorderable = true
 
     @Query private var shelfItems: [ShelfItem]
 
@@ -17,140 +40,51 @@ struct TaskRowView: View {
     @State private var isEditing = false
     @State private var editTitle = ""
     @State private var isFileTargeted = false
-    @State private var isHovered = false
+    @State private var isHoveredNow = false
     private var dropIndicator: DropZone? {
         coordinator.dropIndicator.flatMap { $0.taskID == task.id ? $0.zone : nil }
     }
     @State private var rowHeight: CGFloat = 0
     @FocusState private var titleFocused: Bool
 
-    init(task: BunnyTask, hasSubtasks: Bool) {
+    init(task: BunnyTask, hasSubtasks: Bool, progress: String? = nil, reorderable: Bool = true) {
         self.task = task
         self.hasSubtasks = hasSubtasks
+        self.progress = progress
+        self.reorderable = reorderable
         let id = task.id
         _shelfItems = Query(filter: #Predicate<ShelfItem> { $0.taskID == id })
     }
 
+    private var isHovered: Bool {
+        #if DEBUG
+        if snapshotHoveredID == task.id { return true }
+        #endif
+        return isHoveredNow
+    }
+
+    /// Hand off shows on hover only, on an open top-level note with no session and no active run.
+    /// (Agents have no on/off switch yet; when they get one, it is checked here.)
+    private var showsHandOff: Bool {
+        isHovered && !isEditing && !task.isSubtask && !task.isCompleted
+            && task.agentSessionID == nil && !task.runState.isActive
+    }
+
     var body: some View {
-        HStack(spacing: 6) {
-            // Expand/collapse arrow (parent tasks only, hidden when no subtasks)
-            if !task.isSubtask {
-                Button {
-                    task.isExpanded.toggle()
-                } label: {
-                    Image(systemName: task.isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(hasSubtasks ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.clear))
+        Group {
+            if reorderable {
+                row.onDrag {
+                    TaskDrag.currentID = task.id
+                    return NSItemProvider(object: task.id.uuidString as NSString)
+                } preview: {
+                    dragPreview
                 }
-                .buttonStyle(.plain)
-                .frame(width: 12)
-                .disabled(!hasSubtasks)
-            }
-
-            // Checkbox
-            Button { toggleComplete() } label: {
-                Image(systemName: checkboxSymbol)
-                    .font(.system(size: 17))
-                    .foregroundStyle(checkboxColor)
-                    .contentTransition(.symbolEffect(.replace))
-            }
-            .buttonStyle(.plain)
-
-            // Title: a click opens the note at once; a double-click renames in place.
-            if isEditing {
-                TextField("", text: $editTitle)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14))
-                    .focused($titleFocused)
-                    .onSubmit { commitEdit() }
-                    .onExitCommand { cancelEdit() }
-                    .onChange(of: titleFocused) { _, focused in
-                        if !focused { commitEdit() }
-                    }
             } else {
-                HStack(spacing: 4) {
-                    titleLabel
-                        .onTapGesture { clicked(onTitle: true) }
-                    if !task.taskDescription.isEmpty {
-                        Image(systemName: "text.alignleft").font(.system(size: 10)).foregroundStyle(.tertiary)
-                    }
-                    if !shelfItems.isEmpty {
-                        HStack(spacing: 1) {
-                            Image(systemName: "paperclip")
-                            Text("\(shelfItems.count)")
-                        }
-                        .font(.system(size: 10)).foregroundStyle(.tertiary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            // Right-side actions
-            HStack(spacing: 6) {
-                if !task.isSubtask { timerView }
-
-                if !task.isSubtask {
-                    Button { addSubtask() } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Add subtask")
-                    .opacity(isHovered || task.isPinned || task.hasTimer ? 1 : 0.0)
-                }
-
-                if !task.isSubtask {
-                    Button { togglePin() } label: {
-                        Image(systemName: task.isPinned ? "pin.fill" : "pin")
-                            .font(.system(size: 11))
-                            .foregroundStyle(task.isPinned ? Color.accentColor : .secondary)
-                            .contentTransition(.symbolEffect(.replace))
-                    }
-                    .buttonStyle(.plain)
-                    .help(task.isPinned ? "Unpin" : "Pin to menu bar")
-                }
-
-                if !task.isSubtask {
-                    AgentButton(task: task)
-                }
-
-                Button { archiveTask() } label: {
-                    Image(systemName: "archivebox")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Move to archive")
-                .opacity(isHovered || task.isPinned || task.hasTimer ? 1 : 0.0)
+                row
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .contentShape(Rectangle())
-        // Inside the hover and tap modifiers, so its overlay view counts as part of the row.
-        .appKitContextMenu { contextMenuItems }
-        .animation(.easeOut(duration: 0.15), value: isHovered)
-        .onHover { isHovered = $0 }
-        .onTapGesture { clicked(onTitle: false) }
-        .overlay { dropIndicatorView }
-        .background {
-            ConcentricRectangle().fill(rowBackground)
-        }
-        // Drag & drop live on the full-width row: the subtask indent and a 1 pt strip above and
-        // below (the list's inter-row gap) are part of the drop target, so there are no dead zones.
-        .padding(.leading, task.isSubtask ? 24 : 0)
-        .padding(.vertical, 1)
-        .contentShape(Rectangle())
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeight = $0 }
-        .onDrag {
-            TaskDrag.currentID = task.id
-            return NSItemProvider(object: task.id.uuidString as NSString)
-        } preview: {
-            dragPreview
-        }
-        // One drop target per row (spec §4): files → shelf, tasks → reorder / nest.
-        .onDrop(of: [.fileURL, .utf8PlainText], delegate: RowDropDelegate(
+        // One drop target per row (spec §4): files → attachments, tasks → reorder / nest.
+        .onDrop(of: reorderable ? [.fileURL, .utf8PlainText] : [.fileURL], delegate: RowDropDelegate(
             taskID: task.id,
             rowHeight: rowHeight,
             expandedWithChildren: !task.isSubtask && task.isExpanded && hasSubtasks,
@@ -164,6 +98,119 @@ struct TaskRowView: View {
                 startEditing()
             }
         }
+    }
+
+    private var row: some View {
+        HStack(spacing: RowMetrics.spacing) {
+            Button { toggleComplete() } label: {
+                Image(systemName: checkboxSymbol)
+                    .font(.system(size: 17))
+                    .foregroundStyle(checkboxColor)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(.bunnyRowIcon)
+
+            // Title: a click opens the note at once; a double-click renames in place.
+            if isEditing {
+                TextField("", text: $editTitle)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .focused($titleFocused)
+                    .onSubmit { commitEdit() }
+                    .onChange(of: titleFocused) { _, focused in
+                        // Not after Esc, which ends the edit before the field loses focus.
+                        if !focused && isEditing { commitEdit() }
+                    }
+            } else {
+                titleLabel
+                    .onTapGesture { clicked(onTitle: true) }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                badges
+            }
+
+            if showsHandOff {
+                AgentButton(task: task)
+            }
+        }
+        .padding(.leading, RowMetrics.gutter)
+        .padding(.trailing, 10)
+        .padding(.vertical, 6)
+        .overlay(alignment: .leading) { disclosure }
+        .contentShape(Rectangle())
+        // Inside the hover and tap modifiers, so its overlay view counts as part of the row.
+        .appKitContextMenu { contextMenuItems }
+        .onHover { isHoveredNow = $0 }
+        .onTapGesture { clicked(onTitle: false) }
+        .overlay { dropIndicatorView }
+        .background {
+            RowMetrics.highlight.fill(rowBackground)
+        }
+        // "Set Timer…" from the menu: the picker hangs under the row.
+        .popover(isPresented: $showTimerPicker, arrowEdge: .bottom) {
+            TimerPickerView(task: task)
+        }
+        // The picker takes key; tell the window not to close underneath it.
+        .onChange(of: showTimerPicker) { _, shown in coordinator.setTimerPickerShown(shown) }
+        .onDisappear { if showTimerPicker { coordinator.setTimerPickerShown(false) } }
+        // Drag & drop live on the full-width row: the subtask indent and a 1 pt strip above and
+        // below (the list's inter-row gap) are part of the drop target, so there are no dead zones.
+        .padding(.leading, task.isSubtask ? RowMetrics.subtaskIndent : 0)
+        .padding(.vertical, 1)
+        .contentShape(Rectangle())
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeight = $0 }
+    }
+
+    /// The chevron of a parent with subtasks, in the row's leading gutter: rows without one keep the
+    /// same checkbox column and reserve nothing for it.
+    @ViewBuilder
+    private var disclosure: some View {
+        if hasSubtasks {
+            Button {
+                task.isExpanded.toggle()
+            } label: {
+                Image(systemName: task.isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            // A little wider than the gutter, for a target that is easy to hit.
+            .buttonStyle(BunnyButtonStyle(kind: .icon(18)))
+            .offset(x: -2)
+        }
+    }
+
+    /// Quiet state marks at the trailing end. They only inform; changing any of it is in the menu.
+    private var badges: some View {
+        HStack(spacing: 6) {
+            if task.runState == .running {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 6))
+                    .foregroundStyle(Color.accentColor)
+                    .symbolEffect(.pulse)
+                    .help("Agent working")
+            }
+            if task.isPinned {
+                Image(systemName: "pin.fill").help("Shown in the menu bar")
+            }
+            if !task.taskDescription.isEmpty {
+                Image(systemName: "text.alignleft").help("Has details")
+            }
+            if !shelfItems.isEmpty {
+                HStack(spacing: 1) {
+                    Image(systemName: "paperclip")
+                    Text("\(shelfItems.count)")
+                }
+                .help(shelfItems.count == 1 ? "1 attachment" : "\(shelfItems.count) attachments")
+            }
+            if let progress {
+                Text(progress).monospacedDigit().help("Subtasks done")
+            }
+            if task.hasTimer {
+                TimerBadge(task: task)
+            }
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(.tertiary)
+        .fixedSize()
     }
 
     private var isSelected: Bool { coordinator.selection.ids.contains(task.id) }
@@ -184,18 +231,22 @@ struct TaskRowView: View {
     private var contextMenuItems: [MenuEntry] {
         let selection = coordinator.selection.ids
         if selection.count > 1 && selection.contains(task.id) {
-            MenuEntry.item("Complete") { TaskActions.complete(selection, in: modelContext) }
-            MenuEntry.item("Archive", image: "archivebox") { TaskActions.archive(selection, in: modelContext) }
+            MenuEntry.item("Complete") { TaskActions.complete(selection, in: modelContext, undoable: true) }
+            MenuEntry.item("Copy as Prompt") { TaskActions.copyAsPrompt(selection, in: modelContext) }
             MenuEntry.separator
             MenuEntry.item("Delete", image: "trash", destructive: true) {
-                TaskActions.moveToTrash(selection, in: modelContext)
+                TaskActions.moveToTrash(selection, in: modelContext, undoable: true)
             }
         } else {
+            if !task.isSubtask {
+                MenuEntry.item(task.isPinned ? "Remove from Menu Bar" : "Show in Menu Bar",
+                               image: task.isPinned ? "pin.slash" : "pin") { togglePin() }
+                MenuEntry.separator
+            }
             MenuEntry.item("Edit Title") { startEditing() }
             if !task.isSubtask {
                 MenuEntry.item("Add Subtask") { addSubtask() }
-                MenuEntry.item(task.isPinned ? "Remove from Menu Bar" : "Show in Menu Bar") { togglePin() }
-                // The picker is a popover on the timer button; open it once the menu has closed.
+                // The picker is a popover on the row; open it once the menu has closed.
                 MenuEntry.item("Set Timer…") { DispatchQueue.main.async { showTimerPicker = true } }
                 if task.agentSessionID == nil && !task.runState.isActive {
                     MenuEntry.item("Hand Off to \(AgentSettings.runSettings(for: task).harness.displayName)") {
@@ -203,11 +254,10 @@ struct TaskRowView: View {
                     }
                 }
             }
-            MenuEntry.separator
-            MenuEntry.item("Archive", image: "archivebox") { archiveTask() }
+            MenuEntry.item("Copy as Prompt") { TaskActions.copyAsPrompt([task.id], in: modelContext) }
             MenuEntry.separator
             MenuEntry.item("Delete", image: "trash", destructive: true) {
-                TaskActions.moveToTrash([task.id], in: modelContext)
+                TaskActions.moveToTrash([task.id], in: modelContext, undoable: true)
             }
         }
     }
@@ -232,10 +282,10 @@ struct TaskRowView: View {
             .allowsHitTesting(false)
         case .into:
             ZStack(alignment: .leading) {
-                ConcentricRectangle()
+                RowMetrics.highlight
                     .fill(Color.accentColor.opacity(0.08))
-                ConcentricRectangle()
-                    .stroke(Color.accentColor, lineWidth: 1.5)
+                RowMetrics.highlight
+                    .strokeBorder(Color.accentColor, lineWidth: 1.5)
                 Image(systemName: "arrow.turn.down.right")
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(Color.accentColor)
@@ -270,11 +320,12 @@ struct TaskRowView: View {
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.separator))
     }
 
+    /// Working: accent with the shimmer. Needs input: yellow. Completed: dimmed and struck through.
     @ViewBuilder
     private var titleLabel: some View {
         switch task.runState {
         case .running:
-            ShimmerText(text: task.title, font: .system(size: 14))
+            ShimmerText(text: task.title, font: .system(size: 14), color: .accentColor)
         case .needsInput:
             Text(task.title)
                 .font(.system(size: 14))
@@ -289,13 +340,13 @@ struct TaskRowView: View {
         }
     }
 
+    /// Open: empty circle. Done: a tick, blue by the user, green by an agent. Agent waiting: "?".
+    /// Agent failed: "!".
     private var checkboxSymbol: String {
         switch task.runState {
         case .needsInput: return "questionmark.circle.fill"
-        case .failed: return "exclamationmark.circle"
-        default:
-            if task.isCompleted && task.completedByAgent { return "checkmark.circle.fill" }
-            return task.isCompleted ? "checkmark.circle.fill" : "circle"
+        case .failed: return "exclamationmark.circle.fill"
+        default: return task.isCompleted ? "checkmark.circle.fill" : "circle"
         }
     }
 
@@ -304,39 +355,9 @@ struct TaskRowView: View {
         case .needsInput: return .agentNeedsInput
         case .failed: return .red
         default:
-            if task.isCompleted && task.completedByAgent { return .green }
-            return task.isCompleted ? .accentColor : .secondary
+            guard task.isCompleted else { return .secondary }
+            return task.completedByAgent ? .green : .blue
         }
-    }
-
-    @ViewBuilder
-    private var timerView: some View {
-        let _ = timerManager.tick
-        Button {
-            showTimerPicker = true
-        } label: {
-            if task.isTimerRunning {
-                Text(task.formattedRemaining)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            } else if task.isTimerExpired {
-                Image(systemName: "clock.badge.checkmark")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.green)
-            } else {
-                Image(systemName: "clock")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .buttonStyle(.plain)
-        .help("Set timer")
-        .popover(isPresented: $showTimerPicker, arrowEdge: .bottom) {
-            TimerPickerView(task: task)
-        }
-        // The picker takes key; tell the window not to close underneath it.
-        .onChange(of: showTimerPicker) { _, shown in coordinator.setTimerPickerShown(shown) }
-        .onDisappear { if showTimerPicker { coordinator.setTimerPickerShown(false) } }
     }
 
     // MARK: - Editing
@@ -358,6 +379,7 @@ struct TaskRowView: View {
     private func startEditing() {
         editTitle = task.title
         isEditing = true
+        coordinator.renaming = (task.id, { cancelEdit() })
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             titleFocused = true
         }
@@ -370,20 +392,27 @@ struct TaskRowView: View {
         } else if task.title.isEmpty {
             deleteUntitled()
         }
-        isEditing = false
+        endEditing()
     }
 
+    /// Esc: the title stays as it was.
     private func cancelEdit() {
         if task.title.isEmpty {
             deleteUntitled()
         }
+        endEditing()
+    }
+
+    private func endEditing() {
         isEditing = false
+        // Another row may have started its rename already (this one ends when it loses focus).
+        if coordinator.renaming?.id == task.id { coordinator.renaming = nil }
     }
 
     /// A new note or subtask left without a title is dropped.
     private func deleteUntitled() {
         coordinator.tasksRemoved([task.id])
-        AgentSupervisor.shared.taskWillArchiveOrDelete(task.id)
+        AgentSupervisor.shared.taskWillBeDeleted(task.id)
         ShelfService.removeAll(for: task.id, in: modelContext)
         modelContext.delete(task)
     }
@@ -391,25 +420,11 @@ struct TaskRowView: View {
     // MARK: - Actions
 
     private func toggleComplete() {
-        TaskActions.setCompleted(task, !task.isCompleted)
+        TaskActions.toggleComplete([task.id], in: modelContext, undoable: true)
     }
 
     private func togglePin() {
-        if task.isPinned {
-            task.isPinned = false
-            appState.pinnedTaskID = nil
-            appState.timerExpiredTaskID = nil
-        } else {
-            let descriptor = FetchDescriptor<BunnyTask>(
-                predicate: #Predicate { $0.isPinned }
-            )
-            if let pinned = try? modelContext.fetch(descriptor) {
-                for t in pinned { t.isPinned = false }
-            }
-            task.isPinned = true
-            appState.pinnedTaskID = task.id
-            appState.timerExpiredTaskID = nil
-        }
+        if task.isPinned { TaskActions.unpin(task) } else { TaskActions.pin(task) }
     }
 
     private func addSubtask() {
@@ -418,8 +433,25 @@ struct TaskRowView: View {
         task.isExpanded = true
         appState.editingTaskID = sub.id
     }
+}
 
-    private func archiveTask() {
-        TaskActions.archive([task.id], in: modelContext)
+/// The timer mark of a row: the countdown while it runs (or waits to start), a green mark once it
+/// ran out. Its own view so the one-second tick redraws this text and not the row.
+private struct TimerBadge: View {
+    let task: BunnyTask
+    @Environment(TimerManager.self) private var timerManager
+
+    var body: some View {
+        let _ = timerManager.tick
+        if task.isTimerExpired {
+            Image(systemName: "clock.badge.checkmark")
+                .foregroundStyle(.green)
+                .help("Timer finished")
+        } else {
+            Text(task.formattedRemaining)
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(task.isTimerRunning ? .secondary : .tertiary)
+                .help(task.isTimerRunning ? "Timer running" : "Timer set")
+        }
     }
 }

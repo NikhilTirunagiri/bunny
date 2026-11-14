@@ -2,122 +2,151 @@ import SwiftUI
 import SwiftData
 import AppKit
 
+/// The note's attachments: a wrapping strip of tiles (thumbnail or icon, name underneath) and a plus
+/// that opens the file picker. Files are dropped on the note side as a whole (`TaskPanelView`), so
+/// this is no drop target of its own.
 struct ShelfView: View {
     let taskID: UUID
-    /// False while the panel puts an agent question first: hides the placeholder, keeps items.
-    var showsEmptyDropZone: Bool = true
     @Environment(\.modelContext) private var modelContext
+    @Environment(PanelCoordinator.self) private var coordinator
     @Query private var items: [ShelfItem]
-    @State private var isTargeted = false
-    @State private var hoveredID: UUID?
 
-    init(taskID: UUID, showsEmptyDropZone: Bool = true) {
+    private static let columns = [GridItem(.adaptive(minimum: 66), spacing: 8, alignment: .top)]
+
+    init(taskID: UUID) {
         self.taskID = taskID
-        self.showsEmptyDropZone = showsEmptyDropZone
         _items = Query(filter: #Predicate<ShelfItem> { $0.taskID == taskID },
                        sort: [SortDescriptor(\ShelfItem.sortOrder), SortDescriptor(\ShelfItem.addedAt)])
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Shelf").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Text("Attachments").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.secondary)
                 if !items.isEmpty {
-                    Text("\(items.count)").font(.system(size: 11)).foregroundStyle(.tertiary)
+                    Text("\(items.count)").font(.system(size: 11.5)).foregroundStyle(.tertiary)
                 }
                 Spacer()
+                Button {
+                    let context = modelContext
+                    coordinator.pickFiles { ShelfService.add($0, to: taskID, in: context) }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.bunnyRowIcon)
+                .help("Attach files…")
             }
             if items.isEmpty {
-                if showsEmptyDropZone { emptyZone }
+                Label("Drop or paste a file to attach it", systemImage: "paperclip")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
             } else {
-                // The panel's content already scrolls; no nested scroll view.
-                VStack(spacing: 2) {
-                    ForEach(items) { item in row(item) }
+                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 8) {
+                    ForEach(items) { AttachmentTile(item: $0) }
                 }
             }
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(isTargeted ? AnyShapeStyle(Color.accentColor.opacity(0.15)) : AnyShapeStyle(.clear)))
-        .dropDestination(for: URL.self) { urls, _ in
-            ShelfService.add(urls, to: taskID, in: modelContext) > 0
-        } isTargeted: { isTargeted = $0 }
-    }
-
-    private var emptyZone: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "tray.and.arrow.down").font(.system(size: 18)).foregroundStyle(.tertiary)
-            Text("Drop files or folders here").font(.system(size: 12)).foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity, minHeight: 72)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-            .foregroundStyle(.quaternary))
-    }
-
-    private func row(_ item: ShelfItem) -> some View {
-        let url = ShelfService.resolve(item)
-        let context = modelContext
-        return HStack(spacing: 8) {
-            Group {
-                if let url {
-                    Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable()
-                } else {
-                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
-                }
-            }
-            .frame(width: 20, height: 20)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.displayName).font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
-                Text(url == nil ? "Missing" : ShelfRules.abbreviatedParentPath(of: item.lastKnownPath))
-                    .font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-            }
-            Spacer(minLength: 0)
-        }
-        .opacity(url == nil ? 0.55 : 1)
-        .padding(.horizontal, 6).padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(hoveredID == item.id ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)))
-        .overlay(
-            ShelfItemDragSource(
-                url: url,
-                toolTip: item.lastKnownPath,
-                onDragEnded: { op in
-                    // The row may be gone by now (panel switched task): don't rely on its environment.
-                    guard !op.isEmpty, !item.isDeleted else { return }
-                    ShelfService.remove(item, in: item.modelContext ?? context)
-                },
-                onDoubleClick: { if let url { NSWorkspace.shared.open(url) } },
-                menu: { menu(for: item, url: url, context: context) },
-                onHover: { hoveredID = $0 ? item.id : (hoveredID == item.id ? nil : hoveredID) }
-            )
-        )
-    }
-
-    private func menu(for item: ShelfItem, url: URL?, context: ModelContext) -> NSMenu {
-        let menu = NSMenu()
-        if let url {
-            menu.addItem(ClosureMenuItem("Open") { NSWorkspace.shared.open(url) })
-            menu.addItem(ClosureMenuItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) })
-            menu.addItem(ClosureMenuItem("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(url.path, forType: .string)
-            })
-            menu.addItem(.separator())
-        }
-        menu.addItem(ClosureMenuItem("Remove from Shelf") { ShelfService.remove(item, in: context) })
-        return menu
     }
 }
 
-/// NSMenuItem that runs a closure (keeps itself as target).
-final class ClosureMenuItem: NSMenuItem {
-    private let handler: () -> Void
-    init(_ title: String, handler: @escaping () -> Void) {
-        self.handler = handler
-        super.init(title: title, action: #selector(run), keyEquivalent: "")
-        target = self
+/// One attachment: an image's thumbnail, else the file's (or folder's) icon, with the name under it.
+/// A missing file is dimmed and marked. Hover shows a remove button; double-click opens; dragging it
+/// out copies the file (`ShelfItemDragSource`).
+private struct AttachmentTile: View {
+    let item: ShelfItem
+    @Environment(\.modelContext) private var modelContext
+    #if DEBUG
+    @Environment(\.snapshotHoveredID) private var snapshotHoveredID
+    #endif
+    @State private var isHoveredNow = false
+    @State private var loaded: NSImage?
+
+    private var isHovered: Bool {
+        #if DEBUG
+        if snapshotHoveredID == item.id { return true }
+        #endif
+        return isHoveredNow
     }
-    required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-    @objc private func run() { handler() }
+
+    var body: some View {
+        let url = ShelfService.resolve(item)
+        let context = modelContext
+        VStack(spacing: 4) {
+            // The preview is an overlay so an image filling the tile cannot widen it.
+            Rectangle()
+                .fill(.quaternary.opacity(0.5))
+                .frame(height: 50)
+                .overlay { preview(url) }
+                .clipShape(.rect(cornerRadius: 8, style: .continuous))
+            Text(item.displayName)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .opacity(url == nil ? 0.55 : 1)
+        .overlay(
+            ShelfItemDragSource(
+                url: url,
+                toolTip: url == nil ? "Missing: \(item.lastKnownPath)" : item.lastKnownPath,
+                onDragEnded: { op in
+                    // A linked file dropped on another note moves there. A stored copy stays: its
+                    // file belongs to this note. The tile may be gone by now (note side switched
+                    // note): don't rely on its environment.
+                    guard !op.isEmpty, !item.isDeleted, !item.isOwned else { return }
+                    ShelfService.remove(item, in: item.modelContext ?? context)
+                },
+                onDoubleClick: { if let url { NSWorkspace.shared.open(url) } },
+                onHover: { isHoveredNow = $0 }
+            )
+        )
+        .appKitContextMenu {
+            if let url {
+                MenuEntry.item("Open") { NSWorkspace.shared.open(url) }
+                MenuEntry.item("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                MenuEntry.item("Copy Path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.path, forType: .string)
+                }
+                MenuEntry.separator
+            }
+            MenuEntry.item("Remove") { ShelfService.remove(item, in: context) }
+        }
+        .overlay(alignment: .topTrailing) {
+            if isHovered {
+                Button { ShelfService.remove(item, in: context) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 7.5, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16, height: 16)
+                        .background(Color(nsColor: .windowBackgroundColor), in: .circle)
+                        .overlay(Circle().strokeBorder(.separator, lineWidth: 0.5))
+                }
+                .buttonStyle(BunnyButtonStyle(kind: .icon(16)))
+                .help("Remove")
+                .padding(3)
+            }
+        }
+        .task(id: url) {
+            guard let url, !item.isDirectory, AttachmentThumbnails.isImage(url) else { return }
+            loaded = await AttachmentThumbnails.load(item.id, url: url)
+        }
+    }
+
+    @ViewBuilder
+    private func preview(_ url: URL?) -> some View {
+        if let url {
+            if let thumbnail = loaded ?? AttachmentThumbnails.cached(item.id) {
+                Image(nsImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().frame(width: 32, height: 32)
+            }
+        } else {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 17))
+                .foregroundStyle(.orange)
+        }
+    }
 }

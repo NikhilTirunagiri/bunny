@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 /// other apps is refused. It is cleared on drop only: `.onDrag` reports no end of a cancelled
 /// drag, and `dropExited` also fires when the pointer just moves on to the next row. So a
 /// cancelled drag leaves a stale ID until the next drag replaces it; `validateDrop` refuses it
-/// once its task is archived or deleted, and a drop always moves the task named by the payload.
+/// once its task is in Trash or deleted, and a drop always moves the task named by the payload.
 @MainActor
 enum TaskDrag {
     static var currentID: UUID?
@@ -34,9 +34,9 @@ enum TaskDrag {
         }
     }
 
-    /// The task exists and isn't archived or in Trash.
+    /// The task exists and isn't in Trash.
     fileprivate static func isLive(_ id: UUID, in context: ModelContext) -> Bool {
-        let descriptor = FetchDescriptor<BunnyTask>(predicate: #Predicate { $0.id == id && $0.archivedAt == nil && $0.deletedAt == nil })
+        let descriptor = FetchDescriptor<BunnyTask>(predicate: #Predicate { $0.id == id && $0.deletedAt == nil })
         return ((try? context.fetchCount(descriptor)) ?? 0) > 0
     }
 }

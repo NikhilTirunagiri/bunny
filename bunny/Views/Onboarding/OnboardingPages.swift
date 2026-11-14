@@ -40,7 +40,7 @@ struct TaskContextPage: View {
                 FeatureRow(
                     symbol: "sidebar.left",
                     title: "Hover for details",
-                    detail: "Every task opens a side panel with its description and shelf."
+                    detail: "Every task opens a side panel with its details and attachments."
                 )
                 FeatureRow(
                     symbol: "text.alignleft",

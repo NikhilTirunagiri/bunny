@@ -1,9 +1,9 @@
 import Foundation
 
-/// Pure retention rules for Trash and auto-archive. Time and calendar are injected; no model types.
+/// Pure retention rules for Trash and for completed notes. Time is injected; no model types.
 enum TrashRules {
-    /// Completed items move to the archive on this schedule.
-    enum AutoArchivePolicy: Equatable { case atMidnight, after24Hours, never }
+    /// How long a completed note stays in the Completed group before it moves to Trash.
+    enum CompletedRetention: Equatable { case after24Hours, after7Days, never }
 
     /// The minimum a purge needs to know about a task.
     struct Record: Equatable {
@@ -46,18 +46,12 @@ enum TrashRules {
         return purged
     }
 
-    /// `atMidnight`: completed before the start of today (in `calendar`). `after24Hours`: a full 24 h ago.
-    static func isDueForArchive(completedAt: Date, policy: AutoArchivePolicy, now: Date, calendar: Calendar) -> Bool {
-        switch policy {
-        case .atMidnight: return completedAt < calendar.startOfDay(for: now)
+    /// A completed note is due for Trash once it has been completed for the whole retention period.
+    static func isDueForTrash(completedAt: Date, retention: CompletedRetention, now: Date) -> Bool {
+        switch retention {
         case .after24Hours: return now.timeIntervalSince(completedAt) >= day
+        case .after7Days: return now.timeIntervalSince(completedAt) >= 7 * day
         case .never: return false
         }
-    }
-
-    /// An archived item moves to Trash after `afterDays` (nil = "Never").
-    static func isDueForTrash(archivedAt: Date, afterDays: Int?, now: Date) -> Bool {
-        guard let afterDays else { return false }
-        return now.timeIntervalSince(archivedAt) >= Double(afterDays) * day
     }
 }

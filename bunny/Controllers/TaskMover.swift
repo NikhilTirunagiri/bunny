@@ -5,17 +5,17 @@ import SwiftData
 /// sibling lists, expands a task's new parent and unpins tasks that become subtasks.
 @MainActor
 enum TaskMover {
-    /// All tasks not archived and not in Trash, in the same order the list shows them.
+    /// All tasks not in Trash, in the same order the list shows them.
     private static func activeTasks(in context: ModelContext) -> [BunnyTask] {
         let descriptor = FetchDescriptor<BunnyTask>(
-            predicate: #Predicate { $0.archivedAt == nil && $0.deletedAt == nil },
+            predicate: #Predicate { $0.deletedAt == nil },
             sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]
         )
         return (try? context.fetch(descriptor)) ?? []
     }
 
     /// Tree nodes for the active tasks. A task can't nest when it has subtasks — counted over
-    /// all tasks, archived included, so restoring them can't create grandchildren — or when it
+    /// all tasks, trashed included, so restoring them can't create grandchildren — or when it
     /// has a timer or any agent state (a run, or a finished session: subtasks have no agent
     /// button, so nesting would hide the session).
     private static func nodes(for tasks: [BunnyTask], in context: ModelContext) -> [TaskNode] {
@@ -31,6 +31,16 @@ enum TaskMover {
     static func resolvedZone(dragged: UUID, target: UUID, zone: DropZone, in context: ModelContext) -> DropZone? {
         TaskMoveRules.resolve(dragged: dragged, target: target, zone: zone,
                               nodes: nodes(for: activeTasks(in: context), in: context))
+    }
+
+    /// ⌥↑ / ⌥↓: moves a note one place among the rows it sits with. A subtask moves within its
+    /// parent; a top-level note among the open top-level notes (the Completed group has no order).
+    static func step(_ id: UUID, up: Bool, in context: ModelContext) {
+        let tasks = activeTasks(in: context)
+        guard let task = tasks.first(where: { $0.id == id }), task.isSubtask || !task.isCompleted else { return }
+        let siblings = tasks.filter { $0.parentID == task.parentID && (task.isSubtask || !$0.isCompleted) }.map(\.id)
+        guard let step = TaskMoveRules.keyboardStep(id: id, up: up, siblings: siblings) else { return }
+        perform(dragged: id, target: step.target, zone: step.zone, in: context)
     }
 
     static func perform(dragged: UUID, target: UUID, zone: DropZone, in context: ModelContext) {
@@ -55,7 +65,6 @@ enum TaskMover {
         let appState = AppState.shared
         if appState.pinnedTaskID == moved.id {
             appState.pinnedTaskID = nil
-            appState.timerExpiredTaskID = nil
         }
     }
 }

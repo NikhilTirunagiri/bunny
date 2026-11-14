@@ -4,7 +4,7 @@ import SwiftData
 
 /// Runs Bunny tool calls (spec §5) against the SwiftData store on the main context, so agent-made
 /// changes show up in the UI right away. Only one nesting level, like the rest of Bunny: a new
-/// task's parent must be an existing top-level, live task. Archived and trashed notes are invisible
+/// task's parent must be an existing top-level, live task. Notes in Trash are invisible
 /// to agents: their ids count as unknown.
 @MainActor
 final class BunnyToolsBackendImpl: BunnyToolsBackend {
@@ -153,10 +153,10 @@ final class BunnyToolsBackendImpl: BunnyToolsBackend {
 
     // MARK: - Store
 
-    /// Tasks not archived and not in Trash, in list order.
+    /// Tasks not in Trash, in list order.
     private func activeTasks() -> [BunnyTask] {
         let descriptor = FetchDescriptor<BunnyTask>(
-            predicate: #Predicate { $0.archivedAt == nil && $0.deletedAt == nil },
+            predicate: #Predicate { $0.deletedAt == nil },
             sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]
         )
         return (try? context.fetch(descriptor)) ?? []
@@ -168,7 +168,7 @@ final class BunnyToolsBackendImpl: BunnyToolsBackend {
         return (try? context.fetch(descriptor))?.first
     }
 
-    /// A task not archived and not in Trash, or the "unknown id" tool error.
+    /// A task not in Trash, or the "unknown id" tool error.
     private func liveTask(_ id: UUID) -> Result<BunnyTask, BunnyToolError> {
         guard let task = task(with: id), task.isLive else {
             return .failure(BunnyToolError(message: "No task with id \(id.uuidString)"))

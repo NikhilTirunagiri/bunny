@@ -1,9 +1,10 @@
-import Foundation
+import AppKit
 import SwiftData
 
-/// Note lifecycle actions shared by rows, the bulk bar, the keyboard, the Archive/Trash view and the
-/// scheduler: complete, archive, move to Trash, restore, delete forever. Each action on a top-level
+/// Note lifecycle actions shared by rows, the action strip, the keyboard, the Trash view and the
+/// scheduler: complete, move to Trash, restore, delete forever. Each action on a top-level
 /// note also applies to its subtasks, stops live agents, and keeps the selection and menu bar pin in sync.
+/// `undoable`: the action came from the notes list, so the action strip offers Undo for it.
 @MainActor
 enum TaskActions {
     // MARK: - Complete
@@ -15,75 +16,140 @@ enum TaskActions {
         if !completed { task.completedByAgent = false }
     }
 
-    /// Completes all of `ids`, or reopens them when all are already complete (Space).
-    static func toggleComplete(_ ids: Set<UUID>, in context: ModelContext) {
+    /// Completes all of `ids`, or reopens them when all are already complete (Space, the checkbox).
+    static func toggleComplete(_ ids: Set<UUID>, in context: ModelContext, undoable: Bool = false) {
         let targets = tasks(ids, in: context)
-        let complete = targets.contains { !$0.isCompleted }
-        for task in targets { setCompleted(task, complete) }
-    }
-
-    static func complete(_ ids: Set<UUID>, in context: ModelContext) {
-        for task in tasks(ids, in: context) { setCompleted(task, true) }
-    }
-
-    // MARK: - Archive
-
-    static func archive(_ ids: Set<UUID>, in context: ModelContext) {
-        let now = Date()
-        let family = withSubtasks(ids, in: context)
-        for task in family {
-            AgentSupervisor.shared.taskWillArchiveOrDelete(task.id)
-            task.archivedAt = now
-            unpin(task)
+        if targets.contains(where: { !$0.isCompleted }) {
+            complete(ids, in: context, undoable: undoable)
+        } else {
+            for task in targets { setCompleted(task, false) }
         }
-        PanelCoordinator.shared.tasksRemoved(family.map(\.id))
-        try? context.save()
     }
 
-    /// Back to the notes list, reopened, with no stale run state, question or session from before archiving.
-    static func restoreFromArchive(_ ids: Set<UUID>, in context: ModelContext) {
-        for task in withSubtasks(ids, in: context) where task.archivedAt != nil && task.deletedAt == nil {
-            if task.runState.isActive { AgentSupervisor.shared.stop(task) }   // e.g. archived while needsInput
-            AgentSupervisor.shared.clear(task)
-            task.archivedAt = nil
-            setCompleted(task, false)
-            if task.isTimerExpired { task.timerStartedAt = nil }
-        }
-        try? context.save()
+    static func complete(_ ids: Set<UUID>, in context: ModelContext, undoable: Bool = false) {
+        let targets = tasks(ids, in: context).filter { !$0.isCompleted }
+        guard !targets.isEmpty else { return }
+        let undo = undoable ? undoOffer(.completed, count: targets.count, for: targets, in: context) : nil
+        for task in targets { setCompleted(task, true) }
+        // A multi-selection's actions would take the Undo offer's place in the action strip.
+        if undoable && PanelCoordinator.shared.selection.ids.count > 1 { PanelCoordinator.shared.apply(.clear) }
+        undo?()
     }
 
     // MARK: - Trash
 
-    static func moveToTrash(_ ids: Set<UUID>, in context: ModelContext) {
+    static func moveToTrash(_ ids: Set<UUID>, in context: ModelContext, undoable: Bool = false) {
         let now = Date()
         let family = withSubtasks(ids, in: context).filter { $0.deletedAt == nil }
+        guard !family.isEmpty else { return }
+        let undo = undoable ? undoOffer(.trashed, count: family.filter { ids.contains($0.id) }.count,
+                                        for: family, in: context) : nil
         for task in family {
-            AgentSupervisor.shared.taskWillArchiveOrDelete(task.id)
+            AgentSupervisor.shared.taskWillBeDeleted(task.id)
             task.deletedAt = now
             unpin(task)
         }
         PanelCoordinator.shared.tasksRemoved(family.map(\.id))
         try? context.save()
+        undo?()
     }
 
-    /// The note goes back where it was (notes list or Archive), with its subtasks.
+    /// The note goes back to the notes list as it was, open or completed, with its subtasks. A
+    /// completed note's retention starts again, or the next housekeeping would trash it straight away.
     static func restoreFromTrash(_ ids: Set<UUID>, in context: ModelContext) {
-        for task in withSubtasks(ids, in: context) { task.deletedAt = nil }
+        let now = Date()
+        for task in withSubtasks(ids, in: context) where task.deletedAt != nil {
+            task.deletedAt = nil
+            if task.isCompleted { task.completedAt = now }
+        }
         try? context.save()
     }
 
-    /// Deletes notes for good: the rows, their subtasks and their attachments, after stopping agents.
+    /// Delete Forever / Empty Trash: asks first (in-window, `DeleteConfirmationView`) unless "Do not
+    /// ask again" was chosen (`trash.confirmDeleteForever`).
+    static func confirmDeleteForever(_ ids: Set<UUID>, emptying: Bool = false, in context: ModelContext) {
+        guard !ids.isEmpty else { return }
+        let delete = { deleteForever(ids, in: context) }
+        guard NotesPreferences.confirmDeleteForever else {
+            delete()
+            return
+        }
+        PanelCoordinator.shared.deleteConfirmation = DeleteConfirmation(
+            title: emptying ? "Empty Trash?" : "Delete forever?",
+            confirmTitle: emptying ? "Empty Trash" : "Delete Forever",
+            onConfirm: delete)
+    }
+
+    /// Deletes notes for good: the rows, their subtasks and their attachments (with the files Bunny
+    /// stored for them, `ShelfService.removeAll`), after stopping agents.
     /// Used by Delete Forever, Empty Trash and the automatic purge.
     static func deleteForever(_ ids: Set<UUID>, in context: ModelContext) {
         let family = withSubtasks(ids, in: context)
         for task in family {
-            AgentSupervisor.shared.taskWillArchiveOrDelete(task.id)
+            AgentSupervisor.shared.taskWillBeDeleted(task.id)
             ShelfService.removeAll(for: task.id, in: context)
             unpin(task)
         }
         PanelCoordinator.shared.tasksRemoved(family.map(\.id))
         for task in family { context.delete(task) }
         try? context.save()
+    }
+
+    // MARK: - Undo
+
+    /// Records where `tasks` stand now (call before changing them) and returns the call that puts the
+    /// Undo strip up once the change is made. Undo sets each note back exactly: completion,
+    /// Trash, and the menu bar pin if the action cleared it. An agent the action stopped stays stopped.
+    private static func undoOffer(_ action: UndoRules.Action, count: Int, for tasks: [BunnyTask],
+                                  in context: ModelContext) -> () -> Void {
+        struct Before {
+            let id: UUID, isCompleted: Bool, completedAt: Date?, completedByAgent: Bool
+            let deletedAt: Date?, isPinned: Bool
+        }
+        let before = tasks.map {
+            Before(id: $0.id, isCompleted: $0.isCompleted, completedAt: $0.completedAt,
+                   completedByAgent: $0.completedByAgent,
+                   deletedAt: $0.deletedAt, isPinned: $0.isPinned)
+        }
+        return {
+            PanelCoordinator.shared.offerUndo(UndoRules.message(action, count: count)) {
+                let all = (try? context.fetch(FetchDescriptor<BunnyTask>())) ?? []
+                let byID = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                for state in before {
+                    guard let task = byID[state.id] else { continue }
+                    task.isCompleted = state.isCompleted
+                    task.completedAt = state.completedAt
+                    task.completedByAgent = state.completedByAgent
+                    task.deletedAt = state.deletedAt
+                    // The pin comes back unless another note took the menu bar meanwhile.
+                    if state.isPinned && !task.isPinned && AppState.shared.pinnedTaskID == nil {
+                        task.isPinned = true
+                        AppState.shared.pinnedTaskID = task.id
+                    }
+                }
+                try? context.save()
+            }
+        }
+    }
+
+    // MARK: - Copy as Prompt
+
+    /// Puts the notes on the clipboard as plain text (`NotePrompt`), in list order. A subtask whose
+    /// parent is also copied is left out: it is already in the parent's checklist.
+    static func copyAsPrompt(_ ids: Set<UUID>, in context: ModelContext) {
+        let descriptor = FetchDescriptor<BunnyTask>(sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)])
+        let live = ((try? context.fetch(descriptor)) ?? []).filter(\.isLive)
+        let notes = live.filter { ids.contains($0.id) && !($0.parentID.map(ids.contains) ?? false) }.map { task in
+            NotePrompt.Note(
+                title: task.title,
+                details: task.taskDescription,
+                subtasks: live.filter { $0.parentID == task.id }.map { ($0.title, $0.isCompleted) },
+                attachments: ShelfService.items(for: task.id, in: context).map(\.lastKnownPath))
+        }
+        guard !notes.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(NotePrompt.text(for: notes), forType: .string)
+        PanelCoordinator.shared.showNotice(UndoRules.copiedMessage(count: notes.count))
     }
 
     // MARK: - Scheduled
@@ -96,19 +162,34 @@ enum TaskActions {
         if !ids.isEmpty { deleteForever(ids, in: context) }
     }
 
-    /// Archives completed notes on the `notes.autoArchive` schedule (subtasks follow their parent).
-    static func autoArchive(in context: ModelContext) {
-        let policy = NotesPreferences.autoArchive
-        guard policy != .never else { return }
+    /// Moves completed notes to Trash once `notes.completedRetention` has run out (subtasks follow
+    /// their parent), like a manual delete but with no Undo offer.
+    static func trashExpiredCompleted(in context: ModelContext) {
+        let retention = NotesPreferences.completedRetention
+        guard retention != .never else { return }
         let now = Date()
+        // Top-level notes only (the Completed group): a done subtask stays with its open parent.
         let descriptor = FetchDescriptor<BunnyTask>(
-            predicate: #Predicate { $0.isCompleted && $0.archivedAt == nil && $0.deletedAt == nil })
+            predicate: #Predicate { $0.isCompleted && $0.parentID == nil && $0.deletedAt == nil })
         let due = ((try? context.fetch(descriptor)) ?? []).filter { task in
             // Notes completed before `completedAt` was recorded count as due.
             guard let completedAt = task.completedAt else { return true }
-            return TrashRules.isDueForArchive(completedAt: completedAt, policy: policy, now: now, calendar: .current)
+            return TrashRules.isDueForTrash(completedAt: completedAt, retention: retention, now: now)
         }
-        if !due.isEmpty { archive(Set(due.map(\.id)), in: context) }
+        if !due.isEmpty { moveToTrash(Set(due.map(\.id)), in: context) }
+    }
+
+    /// Once at launch: notes archived by older versions (the Archive is gone) move to Trash, with the
+    /// full Trash retention ahead of them. `archivedAt` is emptied and never read again.
+    static func migrateArchived(in context: ModelContext) {
+        let descriptor = FetchDescriptor<BunnyTask>(predicate: #Predicate { $0.archivedAt != nil })
+        guard let archived = try? context.fetch(descriptor), !archived.isEmpty else { return }
+        let now = Date()
+        for task in archived {
+            if task.deletedAt == nil { task.deletedAt = now }
+            task.archivedAt = nil
+        }
+        try? context.save()
     }
 
     // MARK: - Helpers
@@ -125,12 +206,19 @@ enum TaskActions {
         return all.filter { ids.contains($0.id) || $0.parentID.map(ids.contains) == true }
     }
 
-    private static func unpin(_ task: BunnyTask) {
+    /// Shows `task` in the menu bar, in place of the note shown there before.
+    static func pin(_ task: BunnyTask) {
+        let pinned = FetchDescriptor<BunnyTask>(predicate: #Predicate { $0.isPinned })
+        for other in (try? task.modelContext?.fetch(pinned)) ?? [] { other.isPinned = false }
+        task.isPinned = true
+        AppState.shared.pinnedTaskID = task.id
+    }
+
+    static func unpin(_ task: BunnyTask) {
         let appState = AppState.shared
         if task.isPinned { task.isPinned = false }
         if appState.pinnedTaskID == task.id {
             appState.pinnedTaskID = nil
-            appState.timerExpiredTaskID = nil
         }
     }
 }

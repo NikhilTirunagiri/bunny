@@ -10,6 +10,8 @@ import AppKit
 final class MainPanel: NSPanel {
     var onResignKey: (() -> Void)?
     var onOutsideClick: (() -> Void)?
+    /// Asked when a click lands outside the text field being edited: true ends the edit.
+    var endsEditOnClick: ((NSEvent) -> Bool)?
     /// The visible card in window coordinates.
     var cardRect: NSRect = .zero
 
@@ -38,11 +40,23 @@ final class MainPanel: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
-        if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type),
-           !cardRect.contains(event.locationInWindow) {
-            onOutsideClick?()
-            return
+        if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
+            guard cardRect.contains(event.locationInWindow) else {
+                onOutsideClick?()
+                return
+            }
+            endEditIfClickedOutside(event)
         }
         super.sendEvent(event)
+    }
+
+    /// A text field commits when it loses focus, and a click on a button, a row or empty space takes
+    /// no focus by itself: give it up here, before the click does its own job.
+    private func endEditIfClickedOutside(_ event: NSEvent) {
+        guard let editor = firstResponder as? NSTextView, editor.isFieldEditor else { return }
+        let field = editor.delegate as? NSView ?? editor
+        guard !field.convert(field.bounds, to: nil).contains(event.locationInWindow),
+              endsEditOnClick?(event) == true else { return }
+        makeFirstResponder(nil)
     }
 }

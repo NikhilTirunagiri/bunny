@@ -8,6 +8,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        #if DEBUG
+        if let directory = SnapshotRunner.outputDirectory {
+            SnapshotRunner.run(to: directory)
+            exit(0)
+        }
+        #endif
         WindowManager.applyAppearance(UserDefaults.standard.string(forKey: "appearance") ?? "system")
 
         // Dedicated store (never the shared `Application Support/default.store`), seeded once
@@ -22,6 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         } catch {
             fatalError("ModelContainer init failed: \(error)")
         }
+
+        // Before anything reads the notes: the Archive is gone.
+        TaskActions.migrateArchived(in: modelContainer.mainContext)
 
         UNUserNotificationCenter.current().delegate = self
         // Bunny tools (spec §5): agents manage tasks through the local MCP server.

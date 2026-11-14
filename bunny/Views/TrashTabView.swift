@@ -1,9 +1,11 @@
 import SwiftUI
 import SwiftData
 
-/// Notes in Trash, most recently deleted first, with days left before the automatic purge.
-/// Subtasks travel with their parent and are not listed.
-struct TrashTabView: View {
+/// Replaces the notes list: a slim header with a back button and the title, then the notes in Trash,
+/// most recently deleted first, with days left before the automatic purge. Subtasks travel with
+/// their parent and are not listed. The selection lives in `PanelCoordinator` (`trashSelection`), so
+/// the window's keys reach it: ↑/↓, ⌘A, ⌫, Esc.
+struct TrashView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PanelCoordinator.self) private var coordinator
 
@@ -12,7 +14,6 @@ struct TrashTabView: View {
     private var trashed: [BunnyTask]
 
     @State private var hovered: UUID? = nil
-    @State private var selection = ListSelection()
 
     /// Trashed top-level notes, plus trashed subtasks whose parent is not in Trash.
     private var roots: [BunnyTask] {
@@ -24,36 +25,71 @@ struct TrashTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            header
             Group {
                 if roots.isEmpty {
-                    ArchiveEmptyState(systemImage: "trash", text: "Trash is empty")
+                    emptyState
                 } else {
                     trashList
                 }
             }
             .frame(maxHeight: .infinity)
-            bottomBar
+            actionStrip
         }
-        .onChange(of: visibleIDs) { _, ids in selection.prune(visible: ids) }
+        .onChange(of: visibleIDs, initial: true) { _, ids in
+            coordinator.trashVisibleIDs = ids
+            // Rows that left the Trash drop out of the selection.
+            let gone = coordinator.trashSelection.ids.subtracting(ids)
+            if !gone.isEmpty { coordinator.applyToTrash(.removed(gone)) }
+        }
     }
 
-    @ViewBuilder
-    private var bottomBar: some View {
-        let selected = selection.ids
-        if selected.isEmpty {
-            let caption = NotesPreferences.trashRetentionDays.map { "Deleted after \($0) days" }
-                ?? "Kept until you delete them"
-            ArchiveBottomBar(caption: caption) {
-                Button("Empty Trash", role: .destructive) { deleteForever(Set(trashed.map(\.id)), emptying: true) }
-                    .tint(.red)
-                    .disabled(roots.isEmpty)
+    private var header: some View {
+        HStack(spacing: 2) {
+            Button { coordinator.leaveTrash() } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
-        } else {
-            ArchiveBottomBar(caption: "\(selected.count) selected") {
-                Button("Restore") { TaskActions.restoreFromTrash(selected, in: modelContext) }
-                Button("Delete Forever", role: .destructive) { deleteForever(selected) }
-                    .tint(.red)
+            .buttonStyle(.bunnyIcon)
+            .help("Back to notes (Esc)")
+
+            Text("Trash")
+                .font(.system(size: 13, weight: .semibold))
+            Spacer()
+        }
+        // The chevron sits in the checkbox column, the title in the rows' title column.
+        .padding(.leading, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "trash")
+                .font(.system(size: 28))
+            Text("Trash is empty")
+                .font(.callout)
+        }
+        .foregroundStyle(.tertiary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var actionStrip: some View {
+        let selected = coordinator.trashSelection.ids
+        let standing = NotesPreferences.trashRetentionDays.map { "Deleted after \($0) days" }
+            ?? "Kept until you delete them"
+        return ActionStrip(selected: selected.count, standing: standing) {
+            Button("Restore") { TaskActions.restoreFromTrash(selected, in: modelContext) }
+            Button("Delete Forever") { TaskActions.confirmDeleteForever(selected, in: modelContext) }
+                .buttonStyle(.bunnyDestructive)
+                .help("Delete Forever (⌫)")
+        } standingActions: {
+            Button("Empty Trash") {
+                TaskActions.confirmDeleteForever(Set(trashed.map(\.id)), emptying: true, in: modelContext)
             }
+            .buttonStyle(.bunnyDestructive)
+            .disabled(roots.isEmpty)
         }
     }
 
@@ -71,10 +107,12 @@ struct TrashTabView: View {
     }
 
     private func row(_ task: BunnyTask) -> some View {
-        HStack(spacing: 6) {
+        let selection = coordinator.trashSelection.ids
+        return HStack(spacing: RowMetrics.spacing) {
             Image(systemName: task.isCompleted ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 17))
                 .foregroundStyle(.tertiary)
+                .frame(width: RowMetrics.checkbox)
             Text(task.title)
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
@@ -87,42 +125,36 @@ struct TrashTabView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, RowMetrics.gutter)
+        .padding(.trailing, 10)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .appKitContextMenu {
-            let targets = selection.targets(for: task.id)
+            // On a row inside a multi-selection the menu acts on the selection, otherwise on the row.
+            let targets = selection.count > 1 && selection.contains(task.id) ? selection : [task.id]
             MenuEntry.item("Restore", image: "arrow.uturn.backward") { TaskActions.restoreFromTrash(targets, in: modelContext) }
-            MenuEntry.item("Delete Forever", image: "trash", destructive: true) { deleteForever(targets) }
+            MenuEntry.item("Delete Forever", image: "trash", destructive: true) {
+                TaskActions.confirmDeleteForever(targets, in: modelContext)
+            }
         }
-        .onTapGesture { selection.click(task.id, visible: visibleIDs) }
+        .onTapGesture { coordinator.applyToTrash(PanelCoordinator.clickInput(task.id)) }
         .background {
-            ConcentricRectangle()
-                .fill(archiveRowBackground(selected: selection.ids.contains(task.id), hovered: hovered == task.id))
+            RowMetrics.highlight.fill(rowBackground(selected: selection.contains(task.id), hovered: hovered == task.id))
         }
         .onHover { isHovering in
             hovered = isHovering ? task.id : (hovered == task.id ? nil : hovered)
         }
     }
 
-    /// Asks first (in-window, `DeleteConfirmationView`) unless "Do not ask again" was chosen
-    /// (`trash.confirmDeleteForever`).
-    private func deleteForever(_ ids: Set<UUID>, emptying: Bool = false) {
-        guard !ids.isEmpty else { return }
-        let context = modelContext
-        let delete = { TaskActions.deleteForever(ids, in: context) }
-        guard NotesPreferences.confirmDeleteForever else {
-            delete()
-            return
-        }
-        coordinator.deleteConfirmation = DeleteConfirmation(
-            title: emptying ? "Empty Trash?" : "Delete forever?",
-            confirmTitle: emptying ? "Empty Trash" : "Delete Forever",
-            onConfirm: delete)
+    /// Selection (accent tint), then hover.
+    private func rowBackground(selected: Bool, hovered: Bool) -> AnyShapeStyle {
+        if selected { return AnyShapeStyle(Color.accentColor.opacity(0.2)) }
+        if hovered { return AnyShapeStyle(.quaternary.opacity(0.7)) }
+        return AnyShapeStyle(.clear)
     }
 }
 
-/// A pending Delete Forever / Empty Trash, shown by `DeleteConfirmationView` over the Archive view.
+/// A pending Delete Forever / Empty Trash, shown by `DeleteConfirmationView` over the list column.
 struct DeleteConfirmation {
     let title: String
     let confirmTitle: String
@@ -155,13 +187,13 @@ struct DeleteConfirmationView: View {
                 HStack(spacing: 8) {
                     Spacer(minLength: 0)
                     Button("Cancel") { coordinator.deleteConfirmation = nil }
-                        .keyboardShortcut(.defaultAction)
-                    Button(confirmation.confirmTitle, role: .destructive) {
+                        .buttonStyle(.bunny)
+                    Button(confirmation.confirmTitle) {
                         if doNotAskAgain { NotesPreferences.confirmDeleteForever = false }
                         coordinator.deleteConfirmation = nil
                         confirmation.onConfirm()
                     }
-                    .tint(.red)
+                    .buttonStyle(.bunnyDestructive)
                 }
             }
             .padding(14)

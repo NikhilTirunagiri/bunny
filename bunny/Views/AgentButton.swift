@@ -5,9 +5,9 @@ extension Color {
     static var agentNeedsInput: Color { .yellow.mix(with: .orange, by: 0.35) }
 }
 
-/// The agent handoff button shown on parent-task rows: hands off to the default (or task's chosen)
-/// harness in the background, or shows the note's agent section once there is a run or session, and
-/// offers the full agent config menu and "Open Session in …" on right-click.
+/// Hand off, the one hover action of a row: starts a background run with the note's agent (the one
+/// picked in its right-click menu, else Settings' default). The row shows it only while the note has no
+/// session and no active run, so a click always starts a run.
 struct AgentButton: View {
     @Bindable var task: BunnyTask
 
@@ -17,66 +17,18 @@ struct AgentButton: View {
         "installed globally (Settings → Agents → Bunny tools)."
 
     private var runSettings: RunSettings { AgentSettings.runSettings(for: task) }
-    private var harness: AgentHarness { runSettings.harness }
-
-    private var statusDotColor: Color? {
-        switch task.runState {
-        case .running: return Color.accentColor
-        case .needsInput: return Color.agentNeedsInput
-        case .finished: return Color.green
-        case .failed: return Color.red
-        default: return nil
-        }
-    }
-
-    /// "Hand off to <harness> · <model> · <effort>" before a run or session exists, else "Show agent".
-    private var tooltip: String {
-        guard task.agentSessionID == nil && !task.runState.isActive else {
-            guard task.agentSessionID != nil else { return "Show agent" }
-            return "Show agent. Right-click to open the session in \(AgentSettings.openIn.displayName)."
-        }
-        return "Hand off to \(RunSettingsResolver.caption(runSettings))"
-    }
 
     var body: some View {
         Button {
             AgentSupervisor.shared.primaryAction(for: task)
         } label: {
-            ZStack(alignment: .bottomTrailing) {
-                AgentLogo(harness: harness, size: 12)
-                if let statusDotColor {
-                    Image(systemName: "circle.fill")
-                        .font(.system(size: 5))
-                        .foregroundStyle(statusDotColor)
-                        .symbolEffect(.pulse, isActive: task.runState == .running)
-                        .offset(x: 2, y: 2)
-                }
-            }
+            AgentLogo(harness: runSettings.harness, size: 12)
         }
-        .buttonStyle(.plain)
-        .help(tooltip)
+        .buttonStyle(.bunnyRowIcon)
+        .help("Hand off to \(RunSettingsResolver.caption(runSettings))")
         .contextMenu {
-            // Only before a session exists; afterwards only the session items below.
             if AgentConfigMenu.isAvailable(for: task) {
                 AgentConfigMenu(task: task)
-            }
-
-            if task.agentSessionID != nil {
-                Button("Open Session in \(AgentSettings.openIn.displayName)") {
-                    AgentSupervisor.shared.openSession(task)
-                }
-            }
-
-            if task.runState.isActive {
-                Button("Stop Agent") {
-                    AgentSupervisor.shared.stop(task)
-                }
-            }
-
-            if !task.runState.isActive && task.runState != .idle {
-                Button("Clear Agent") {
-                    AgentSupervisor.shared.clear(task)
-                }
             }
         }
     }

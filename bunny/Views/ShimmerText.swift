@@ -1,25 +1,26 @@
 import SwiftUI
 
-/// Title that "flows" left→right: a soft bright band sweeps across text drawn at 30 % opacity.
+/// Title that "flows" left→right: a soft bright band sweeps across text drawn at 50 % opacity.
 struct ShimmerText: View {
     let text: String
     var font: Font = .system(size: 14)
+    var color: Color = .primary
     var period: Double = 1.8
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let label = Text(text).font(font).lineLimit(1)
         if reduceMotion {
-            label.opacity(0.6)
+            label.foregroundStyle(color.opacity(0.6))
         } else {
             TimelineView(.animation) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
                 let phase = CGFloat((t.truncatingRemainder(dividingBy: period)) / period) // 0…1
                 label
-                    .foregroundStyle(.primary.opacity(0.3))
+                    .foregroundStyle(color.opacity(0.5))
                     .overlay {
                         label
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(color)
                             .mask {
                                 GeometryReader { geo in
                                     let w = geo.size.width

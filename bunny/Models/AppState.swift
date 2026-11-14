@@ -7,6 +7,5 @@ final class AppState {
     private init() {}
 
     var pinnedTaskID: UUID? = nil
-    var timerExpiredTaskID: UUID? = nil
     var editingTaskID: UUID? = nil
 }

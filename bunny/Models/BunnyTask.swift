@@ -13,6 +13,7 @@ final class BunnyTask {
     var timerStartedAt: Date? = nil
     var isExpanded: Bool = true
     var parentID: UUID? = nil
+    /// Unused: the Archive is gone (`TaskActions.migrateArchived` empties it). Kept for the store schema.
     var archivedAt: Date? = nil
     var deletedAt: Date? = nil
     var createdAt: Date = Date()
@@ -41,10 +42,8 @@ final class BunnyTask {
         self.sortOrder = sortOrder
     }
 
-    var isArchived: Bool { archivedAt != nil }
-    var isInTrash: Bool { deletedAt != nil }
-    /// In the notes list: neither archived nor in Trash.
-    var isLive: Bool { archivedAt == nil && deletedAt == nil }
+    /// In the notes list: not in Trash.
+    var isLive: Bool { deletedAt == nil }
     var isSubtask: Bool { parentID != nil }
     var hasTimer: Bool { timerDuration != nil }
 

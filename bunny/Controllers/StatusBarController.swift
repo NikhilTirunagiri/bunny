@@ -8,6 +8,8 @@ final class StatusBarController: NSObject {
     private var updateTimer: Timer?
     private var modelContext: ModelContext?
     private var windowController: MainWindowController?
+    /// Up to when finished timers have been announced (`TimerRules.justExpired`).
+    private var lastTimerCheck = Date()
 
     private static let monoFont = NSFont.monospacedDigitSystemFont(
         ofSize: NSFont.systemFontSize,
@@ -78,7 +80,7 @@ final class StatusBarController: NSObject {
         guard let context = modelContext else { return }
         let descriptor = FetchDescriptor<BunnyTask>()
         guard let all = try? context.fetch(descriptor) else { return }
-        if let pinned = all.first(where: { $0.isPinned && $0.archivedAt == nil && $0.deletedAt == nil }) {
+        if let pinned = all.first(where: { $0.isPinned && $0.deletedAt == nil }) {
             AppState.shared.pinnedTaskID = pinned.id
         }
     }
@@ -111,6 +113,7 @@ final class StatusBarController: NSObject {
     }
 
     func updateMenuBarItem() {
+        notifyFinishedTimers()
         guard let button = statusItem?.button else { return }
         guard let pinnedID = AppState.shared.pinnedTaskID,
               let context = modelContext else {
@@ -120,7 +123,7 @@ final class StatusBarController: NSObject {
 
         let descriptor = FetchDescriptor<BunnyTask>()
         guard let all = try? context.fetch(descriptor),
-              let task = all.first(where: { $0.id == pinnedID && $0.archivedAt == nil && $0.deletedAt == nil }) else {
+              let task = all.first(where: { $0.id == pinnedID && $0.deletedAt == nil }) else {
             AppState.shared.pinnedTaskID = nil
             setDefault(button)
             return
@@ -134,10 +137,6 @@ final class StatusBarController: NSObject {
         } else if task.isTimerExpired {
             setPinned(button, title: truncated)
             applyGreen(button)
-            if AppState.shared.timerExpiredTaskID != pinnedID {
-                AppState.shared.timerExpiredTaskID = pinnedID
-                notify(title: task.title)
-            }
         } else {
             setPinned(button, title: truncated)
             clearGreen(button)
@@ -169,6 +168,21 @@ final class StatusBarController: NSObject {
 
     private func clearGreen(_ button: NSStatusBarButton) {
         button.layer?.backgroundColor = nil
+    }
+
+    /// "Timer complete", once for every note in the list whose timer just ran out, shown in the menu
+    /// bar or not.
+    private func notifyFinishedTimers() {
+        let now = Date()
+        defer { lastTimerCheck = now }
+        let started = FetchDescriptor<BunnyTask>(predicate: #Predicate { $0.timerStartedAt != nil })
+        let live = ((try? modelContext?.fetch(started)) ?? []).filter(\.isLive)
+        let timers = live.compactMap { task -> TimerRules.Started? in
+            guard let startedAt = task.timerStartedAt, let duration = task.timerDuration else { return nil }
+            return TimerRules.Started(id: task.id, startedAt: startedAt, duration: duration)
+        }
+        let finished = Set(TimerRules.justExpired(timers, since: lastTimerCheck, now: now))
+        for task in live where finished.contains(task.id) { notify(title: task.title) }
     }
 
     private func notify(title: String) {

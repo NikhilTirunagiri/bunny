@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 struct TimerPickerView: View {
     @Bindable var task: BunnyTask
@@ -7,6 +8,8 @@ struct TimerPickerView: View {
     @State private var hoursStr = "0"
     @State private var minsStr  = "25"
     @State private var secsStr  = "0"
+    /// Start also puts the note in the menu bar (title and countdown), or takes it out of it.
+    @State private var showInMenuBar = true
     @FocusState private var focused: Field?
 
     private enum Field: Hashable { case hours, mins, secs }
@@ -31,6 +34,12 @@ struct TimerPickerView: View {
                 unitColumn(label: "SEC", text: $secsStr,  field: .secs,  limit: 59)
             }
 
+            if !task.isSubtask {
+                Toggle("Show in menu bar", isOn: $showInMenuBar)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12))
+            }
+
             HStack {
                 if task.hasTimer {
                     Button("Clear") {
@@ -46,6 +55,9 @@ struct TimerPickerView: View {
                     guard duration > 0 else { return }
                     task.timerDuration = duration
                     task.timerStartedAt = Date()
+                    if !task.isSubtask {
+                        if showInMenuBar { TaskActions.pin(task) } else { TaskActions.unpin(task) }
+                    }
                     dismiss()
                 }
                 .buttonStyle(.glassProminent)
@@ -60,6 +72,13 @@ struct TimerPickerView: View {
             if newFocus != .secs  { commit(&secsStr,  limit: 59) }
         }
         .onAppear {
+            // Checked unless the menu bar is showing another note's running timer.
+            let shownID = AppState.shared.pinnedTaskID
+            let shown = FetchDescriptor<BunnyTask>(predicate: #Predicate { $0.isPinned })
+            let shownTimerRunning = ((try? task.modelContext?.fetch(shown)) ?? [])
+                .contains { $0.id == shownID && $0.isTimerRunning }
+            showInMenuBar = TimerRules.takesMenuBar(note: task.id, shown: shownID, shownTimerRunning: shownTimerRunning)
+
             let total: Int
             if task.isTimerRunning || task.isTimerExpired {
                 total = Int(task.remainingSeconds)

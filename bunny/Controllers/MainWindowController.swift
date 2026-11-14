@@ -38,9 +38,14 @@ final class MainWindowController {
             DispatchQueue.main.async { self?.closeIfFocusLeft() }
         }
         panel.onOutsideClick = { [weak self] in self?.closeWindow() }
+        panel.endsEditOnClick = { [coordinator] in coordinator.clickEndsEdit($0) }
 
         coordinator.onOpenTaskChange = { [weak self] in self?.updateNoteSide(animated: true) }
         coordinator.onTransientUIEnded = { [weak self] in self?.recheckFocusSoon() }
+        coordinator.onFilePickerEnded = { [weak self] in
+            guard let self, self.panel.isVisible else { return }
+            self.panel.makeKey()
+        }
 
         // Bunny's own context menus: never close underneath them.
         let center = NotificationCenter.default
@@ -102,7 +107,7 @@ final class MainWindowController {
 
     private func closeIfFocusLeft() {
         guard panel.isVisible, !panel.isKeyWindow,
-              !menuTracking, !coordinator.timerPickerShown else { return }
+              !menuTracking, !coordinator.timerPickerShown, !coordinator.filePickerShown else { return }
         if let key = NSApp.keyWindow, isAttachedToPanel(key) { return }
         // The button is still down: this may be a drag on its way here. Decide when it is released:
         // released over the card (a drop), the window takes key and stays; anywhere else it closes.
@@ -181,9 +186,13 @@ final class MainWindowController {
         return event.keyCode == 53 ? handleEscape() : handleListKey(event)
     }
 
-    /// ⌘N from anywhere. The rest act on the notes list, only while no text field or editor has focus:
-    /// ↑/↓ move the selection, Return shows the note, Space toggles complete, ⌫ / ⌘⌫ move to Trash,
-    /// ⌘A selects all.
+    /// ⌘N and ⌘F from anywhere. In the Trash view: ↑/↓ move the selection, ⌘A selects all, ⌫ / ⌘⌫
+    /// delete the selection forever (after the confirmation). Otherwise: Tab accepts the quick-capture offer while its strip shows. The rest act
+    /// on the notes list, only while no text field or editor has focus: ↑/↓ move the selection, ⌥↑/⌥↓
+    /// move the note, Return shows the note, Space toggles complete, ⌫ / ⌘⌫ move to Trash, ⌘A selects
+    /// all, ⌘V attaches a copied file or image to the open note. ⌘Z (undo) and ⌘C (copy as prompt)
+    /// also work from the New note field while it is empty, which is where focus sits after opening
+    /// the window.
     private func handleListKey(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased()
@@ -199,33 +208,87 @@ final class MainWindowController {
             coordinator.focusNewNote()
             return true
         }
-        guard panel.isKeyWindow, !coordinator.showingArchive, !(panel.firstResponder is NSTextView) else { return false }
+        if flags == .command && key == "f" {
+            coordinator.startSearch()
+            return true
+        }
+        guard panel.isKeyWindow else { return false }
+        if coordinator.showingTrash {
+            switch (event.keyCode, flags) {
+            case (126, []): coordinator.applyToTrash(.up)
+            case (125, []): coordinator.applyToTrash(.down)
+            case (_, .command) where key == "a": coordinator.applyToTrash(.selectAll)
+            case (51, []), (51, .command):
+                TaskActions.confirmDeleteForever(coordinator.trashSelection.ids, in: modelContext)
+            default: return false
+            }
+            return true
+        }
+        let textView = panel.firstResponder as? NSTextView
+        if event.keyCode == 48, flags.isEmpty, textView?.hasMarkedText() != true,
+           let accept = coordinator.quickCaptureAccept {
+            accept()
+            return true
+        }
+        let selected = coordinator.selection.ids
+        if textView == nil || (coordinator.newNoteFieldFocused && textView?.string.isEmpty == true) {
+            if flags == .command && key == "z" { return coordinator.performUndo() }
+            if flags == .command && key == "c" && !selected.isEmpty {
+                TaskActions.copyAsPrompt(selected, in: modelContext)
+                return true
+            }
+        }
+        guard textView == nil else { return false }
         switch (event.keyCode, flags) {
         case (126, []): coordinator.apply(.up)
         case (125, []): coordinator.apply(.down)
+        case (126, .option), (125, .option):
+            // Not in search results: they are a filtered view with no order of their own.
+            if let id = coordinator.selection.single, !coordinator.searching {
+                let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) {
+                    TaskMover.step(id, up: event.keyCode == 126, in: modelContext)
+                }
+            }
         case (36, []), (76, []): coordinator.openCursor()
-        case (49, []): TaskActions.toggleComplete(coordinator.selection.ids, in: modelContext)
-        case (51, []), (51, .command): TaskActions.moveToTrash(coordinator.selection.ids, in: modelContext)
+        case (49, []): TaskActions.toggleComplete(selected, in: modelContext, undoable: true)
+        case (51, []), (51, .command): TaskActions.moveToTrash(selected, in: modelContext, undoable: true)
         case (_, .command) where key == "a": coordinator.apply(.selectAll)
+        case (_, .command) where key == "v":
+            guard let id = coordinator.openTaskID,
+                  AttachmentRules.clipboardKind(types: ShelfService.clipboardTypes) != nil else { return false }
+            ShelfService.attachClipboard(to: id, in: modelContext)
         default: return false
         }
         return true
     }
 
-    /// Esc cancels the delete confirmation first, then ends a text edit (except in the New note field),
-    /// then clears a multi-selection, then closes the note side (unless pinned), then closes the window.
-    /// IME composition keeps its Esc.
+    /// Esc cancels the delete confirmation first, then a row rename, then ends a text edit (except in
+    /// the New note and search fields), then leaves search, then clears a multi-selection, then closes
+    /// the note side (unless pinned), then closes the window. In the Trash view it clears the
+    /// selection, then goes back to the notes list. IME composition keeps its Esc.
     private func handleEscape() -> Bool {
         if coordinator.deleteConfirmation != nil {
             coordinator.deleteConfirmation = nil
             return true
         }
-        if let textView = panel.firstResponder as? NSTextView {
-            if textView.hasMarkedText() { return false }
-            if !coordinator.newNoteFieldFocused {
-                panel.makeFirstResponder(nil)
-                return true
-            }
+        let textView = panel.firstResponder as? NSTextView
+        if textView?.hasMarkedText() == true { return false }
+        if let renaming = coordinator.renaming {
+            renaming.cancel()
+            return true
+        }
+        if textView != nil && !coordinator.newNoteFieldFocused && !coordinator.searchFieldFocused {
+            panel.makeFirstResponder(nil)
+            return true
+        }
+        if coordinator.showingTrash {
+            if coordinator.trashSelection.ids.isEmpty { coordinator.leaveTrash() } else { coordinator.applyToTrash(.clear) }
+            return true
+        }
+        if coordinator.searching {
+            coordinator.endSearch()
+            return true
         }
         if coordinator.selection.ids.count > 1 || (coordinator.openTaskID != nil && !PanelCoordinator.isPinned) {
             coordinator.closeNoteSide()

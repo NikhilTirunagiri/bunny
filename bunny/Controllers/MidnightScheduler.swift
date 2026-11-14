@@ -1,8 +1,8 @@
 import Foundation
 import SwiftData
 
-/// Runs note housekeeping — auto-archive (`notes.autoArchive`) and the Trash purge
-/// (`trash.retentionDays`) — at launch, at midnight, and hourly (for the 24-hour policy and missed midnights).
+/// Runs note housekeeping — completed notes to Trash (`notes.completedRetention`) and the Trash purge
+/// (`trash.retentionDays`) — at launch, at midnight, and hourly.
 final class MidnightScheduler {
     static let shared = MidnightScheduler()
     private var timer: Timer?
@@ -43,7 +43,7 @@ final class MidnightScheduler {
 
     private func runHousekeeping() {
         guard let context = modelContext else { return }
-        TaskActions.autoArchive(in: context)
+        TaskActions.trashExpiredCompleted(in: context)
         TaskActions.purgeExpiredTrash(in: context)
     }
 }
